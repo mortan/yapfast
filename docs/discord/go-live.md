@@ -208,9 +208,11 @@ buffer starved keyframes. Capped CRF ran past Discord's cap.
 With "Encode streams with the GPU" in Settings, Advanced, on unless turned off,
 a stream's H264 goes to the graphics card's encoder where it has one:
 `native/hwenc.c` opens FFmpeg's NVENC encoder, then on Windows its AMF one
-(AMD) and on Linux its VA-API one (AMD and Intel), and x264 when none opens.
-It's on by default because it takes almost no processor time and looks better
-than x264 at low bitrates. Intel graphics encode with x264 on Windows so far.
+(AMD) and on Linux its VA-API one (AMD and Intel), and on macOS
+`native/vtenc.c` opens VideoToolbox's ([On macOS](#on-macos)); x264 encodes
+when none opens. It's on by default because it takes almost no processor
+time and looks better than x264 at low bitrates. Intel graphics encode with
+x264 on Windows so far.
 The setting lives in `layout.json` and reaches the worker with each
 `Job::Share`; the camera stays on x264. When the GPU's encoder fails during a
 stream, x264 takes over from that frame with a keyframe. The worker logs which
@@ -256,3 +258,24 @@ withdraws it with its own op 14 `codecs`, marking it not to encode, and goes on
 in H264. Another Yapfast watching keeps the stream in H265. Which of Discord's
 own clients decode H265 isn't checked yet. AMF hasn't run on AMD hardware yet:
 Wine has no AMF runtime, so there it fails to open and x264 encodes.
+
+### On macOS
+
+`vendor/ffmpeg-src` isn't built for macOS, so `native/vtenc.c` gives
+`hwenc.c`'s interface through VideoToolbox: a `VTCompressionSession` that
+requires the hardware encoder, which every Apple silicon Mac has for H264 and
+H265 (the engine is logged as "VideoToolbox H264" or "VideoToolbox H265"). It
+runs in real time without frame reordering, in Main profile at the level the
+size calls for, with a keyframe every 3 seconds (`MaxKeyFrameInterval`) and
+when asked (`ForceKeyFrame`), aiming for the bitrate (`AverageBitRate`) and
+capped at it over half a second (`DataRateLimits`); both change on the running
+session, without a keyframe. Pictures are tagged as libyuv converts them,
+BT.601 in limited range (the transfer reads as BT.709's, the same curve, since
+VideoToolbox has no SMPTE 170M name for it). Each I420 frame is converted
+by libyuv into an NV12 buffer from the session's own pool and encoded
+synchronously, and the output callback writes the frame's NAL units, with
+start codes in place of their lengths and the parameter sets (with H265's VPS)
+before each keyframe, straight into the encoder's output buffer.
+VideoToolbox's low-latency rate control (`EnableLowLatencyRateControl`) is
+off: it made keyframes larger without keeping them under the cap. An encoded
+frame takes the processor well under a millisecond, where x264 takes several.

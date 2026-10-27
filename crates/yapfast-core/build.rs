@@ -16,6 +16,7 @@ fn main() {
         "hwenc.c",
         "hevc.c",
         "vtdec.c",
+        "vtenc.c",
         "vtdec.h",
         "aacdec.c",
         "aacdec.h",
@@ -76,10 +77,17 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_DISCORD").is_none() {
         return;
     }
+    // libwebrtc's macOS FFmpeg decodes neither H264 nor H265, and
+    // ffmpeg-src builds no encoders there, so VideoToolbox decodes and
+    // encodes: decode.c's and video.c's H264, vtdec.c's H265 in place of
+    // hevc.c's, and vtenc.c in place of hwenc.c. Nor AAC, which AudioToolbox
+    // decodes for video.c, in aacdec.c. webrtc-sys links the frameworks
+    // already; they're named for these files' own calls.
+    let videotoolbox = target_os == "macos";
     // FFmpeg's hardware encoders and HEVC decoder, where ffmpeg-src builds
     // them: hwenc.c and hevc.c see only their headers, with FFmpeg's names
     // prefixed as in the library.
-    if std::env::var("DEP_FFMPEG_ENCODERS").as_deref() == Ok("1") {
+    if !videotoolbox && std::env::var("DEP_FFMPEG_ENCODERS").as_deref() == Ok("1") {
         let mut ffmpeg = cc::Build::new();
         ffmpeg
             .file("native/hwenc.c")
@@ -98,13 +106,8 @@ fn main() {
         println!("cargo:rustc-cfg=hwenc");
         println!("cargo:rustc-cfg=hevcdec");
     }
-    // libwebrtc's macOS FFmpeg decodes neither H264 nor H265, so VideoToolbox
-    // does: decode.c's and video.c's H264, and vtdec.c's H265 in place of
-    // hevc.c's. Nor AAC, which AudioToolbox decodes for video.c, in aacdec.c.
-    // webrtc-sys links the frameworks already; they're named for vtdec.c's
-    // and aacdec.c's own calls.
-    let videotoolbox = target_os == "macos";
     if videotoolbox {
+        println!("cargo:rustc-cfg=hwenc");
         println!("cargo:rustc-cfg=hevcdec");
         for framework in [
             "VideoToolbox",
@@ -127,7 +130,10 @@ fn main() {
     };
     let mut codecs = cc::Build::new();
     if videotoolbox {
-        codecs.file("native/vtdec.c").file("native/aacdec.c");
+        codecs
+            .file("native/vtdec.c")
+            .file("native/vtenc.c")
+            .file("native/aacdec.c");
     }
     codecs
         .file("native/vp8.c")

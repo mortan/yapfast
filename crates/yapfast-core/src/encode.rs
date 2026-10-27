@@ -1,8 +1,9 @@
 //! Encoding for Go Live and the camera, through native/vp8.c with the libvpx
 //! inside libwebrtc, native/h264.c with x264 (vendor/x264-src), and
 //! native/hwenc.c with FFmpeg's hardware encoders (vendor/ffmpeg-src) where
-//! the GPU has one. Frames arrive as RGBA or I420 and leave as VP8 frames or
-//! H264 access units in Annex B form.
+//! the GPU has one, or on macOS native/vtenc.c with VideoToolbox's. Frames
+//! arrive as RGBA or I420 and leave as VP8 frames or H264 and H265 access
+//! units in Annex B form.
 
 use std::ffi::{c_int, c_long, c_longlong, c_uchar, c_uint, c_ulong};
 
@@ -13,8 +14,8 @@ use livekit::webrtc::{
 };
 use yapfast_discord::rtp::Codec;
 // FFmpeg's and x264's libraries, which native/hwenc.c and native/h264.c
-// call: linked only while named.
-#[cfg(hwenc)]
+// call: linked only while named. macOS encodes on the GPU with VideoToolbox.
+#[cfg(all(hwenc, not(target_os = "macos")))]
 use ffmpeg_src as _;
 use x264_src as _;
 
@@ -144,8 +145,8 @@ pub struct Encoder {
     raw: *mut Raw,
     codec: Codec,
     effort: Effort,
-    /// Which encoder runs: "libvpx", "x264", or FFmpeg's name for a
-    /// hardware one, such as "h264_nvenc".
+    /// Which encoder runs: "libvpx", "x264", or a hardware one, by FFmpeg's
+    /// name, such as "h264_nvenc", or as "VideoToolbox H264".
     engine: String,
     encode: Encode,
     set_bitrate: SetBitrate,
@@ -215,8 +216,8 @@ impl Encoder {
         })
     }
 
-    /// Which encoder runs: "libvpx", "x264", or FFmpeg's name for a
-    /// hardware one, such as "h264_nvenc".
+    /// Which encoder runs: "libvpx", "x264", or a hardware one, by FFmpeg's
+    /// name, such as "h264_nvenc", or as "VideoToolbox H264".
     pub fn engine(&self) -> &str {
         &self.engine
     }
@@ -578,11 +579,14 @@ mod tests {
     }
 
     /// H265 on the GPU, where it has an encoder for it: parameter sets and
-    /// an IDR first, a delta, then a forced IDR. Yapfast can't decode H265,
-    /// so this reads the units' types.
+    /// an IDR first, a delta, then a forced IDR, which decode where Yapfast
+    /// decodes H265. Every Mac Yapfast runs on encodes it.
     #[test]
     fn encodes_h265_on_the_gpu() {
         if Encoder::new(Codec::H265, 320, 180, 30, 500, Effort::Light, true).is_err() {
+            if cfg!(target_os = "macos") {
+                panic!("VideoToolbox encodes H265");
+            }
             eprintln!("no GPU encoder for H265 here");
             return;
         }
@@ -605,13 +609,27 @@ mod tests {
         assert!(idr(&types(&frames[2].1)), "the forced keyframe");
         let keys: Vec<bool> = frames.iter().map(|(key, _)| *key).collect();
         assert_eq!(keys[..3], [true, false, true]);
+        if cfg!(hevcdec) {
+            let mut decoder = Decoder::new(Codec::H265).unwrap();
+            let mut shown = 0;
+            for (_, data) in &frames {
+                if let Some(picture) = decoder.decode(data).unwrap() {
+                    assert_eq!((picture.width, picture.height), (320, 180));
+                    shown += 1;
+                }
+            }
+            assert!(shown >= 3, "{shown} pictures from {engine}");
+        }
     }
 
     /// The GPU's encoder where this machine has one, x264 where it hasn't:
-    /// the same stream either way.
+    /// the same stream either way. Every Mac Yapfast runs on has one.
     #[test]
     fn encodes_h264_on_the_gpu_or_falls_back() {
         let engine = check_h264(Effort::Light, (320, 180), true);
         eprintln!("encoded with {engine}");
+        if cfg!(target_os = "macos") {
+            assert_eq!(engine, "VideoToolbox H264");
+        }
     }
 }

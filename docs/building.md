@@ -239,7 +239,8 @@ Its build script compiles it, and NASM assembles its x86-64 assembly, with
 every symbol prefixed, apart from the FFmpeg in libwebrtc, and it loads
 libva, NVIDIA's driver and AMD's AMF runtime only when an encoder opens.
 Its `README.yapfast.md` explains the rest. Targets without a `gen/` folder build without hardware
-encoding or H265 decoding from it; macOS decodes H265 with VideoToolbox.
+encoding or H265 decoding from it; macOS encodes and decodes with VideoToolbox
+instead.
 
 Each has a `README.yapfast.md` with its changes, except the two Slint crates, which
 this section describes. The Slint crates keep their `.rs` files at the crate
@@ -268,12 +269,15 @@ files named here are in `crates/yapfast-core/native/`.
   with libvpx, `picture.c` scales with libyuv, and `camera.cc` captures
   through libwebrtc's capture module.
 - `vendor/ffmpeg-src` holds only the GPU encoders, which `hwenc.c` drives,
-  and the HEVC decoder for watched H265 streams, in `hevc.c`.
+  and the HEVC decoder for watched H265 streams, in `hevc.c`, on Linux and
+  Windows.
 - On macOS, VideoToolbox decodes H264 for `decode.c` and `video.c`, and
   watched H265 streams, in `vtdec.c`, which gives `hevc.c`'s interface. It
   decodes H264 only in 8 bits and 4:2:0, so 10-bit, 4:2:2 and 4:4:4 H264
-  files don't play there. AudioToolbox decodes video files' AAC sound, LC
-  and HE-AAC v1 and v2, for `video.c`, in `aacdec.c`.
+  files don't play there. VideoToolbox's hardware encoder encodes Go Live's
+  H264 and H265 in `vtenc.c`, which gives `hwenc.c`'s interface.
+  AudioToolbox decodes video files' AAC sound, LC and HE-AAC v1 and v2, for
+  `video.c`, in `aacdec.c`.
 - `vendor/x264-src` encodes H264 on the CPU, in `h264.c`, for Go Live and
   the camera.
 
