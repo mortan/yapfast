@@ -487,14 +487,15 @@ on the local stack.
 | Wayland | The xdg-desktop-portal GlobalShortcuts portal: Yapfast binds one shortcut, offering the key as its preferred trigger, and holds it from Activated to Deactivated. The desktop may ask to approve it or give it another key; settings show the shortcut it gave. KDE Plasma, Hyprland and GNOME from 48 have the portal | Against a stand-in portal on a private bus (`the_portal_binds_the_key_and_holds_it`); not on a real desktop |
 | X11 | XInput 2's raw key events on the root window, which come whatever window has the focus and leave the key to it | Under Xvfb, with xdotool typing (`x11_hears_the_key_whatever_has_the_focus`) |
 | Windows | A low-level keyboard hook (`WH_KEYBOARD_LL`) on a thread of its own, which sees the key's release, unlike `RegisterHotKey`, and passes every key on | Under Wine 10.0, with `SendInput` typing (`the_hook_hears_the_key_go_down_and_up`); not on real Windows, where Windows may keep keys typed into a program running as administrator, such as some games, from the hook, as Discord warns of its own |
+| macOS | A listen-only event tap (`CGEventTapCreate` at the session, `kCGEventTapOptionListenOnly`) on a thread's run loop, matching the key's virtual key code, which is winit's scan code there; a modifier, such as Right Shift, holds while its side's flag is set in FlagsChanged. It takes no key from the app in front, unlike `RegisterEventHotKey`, and is re-enabled when macOS turns it off. It needs Input Monitoring: without it Yapfast asks macOS, which lists it under System Settings › Privacy & Security › Input Monitoring, and the key works only in front until Yapfast starts again with it allowed | Which event decides the key (`keys_and_modifiers_go_down_and_up`); with `CGEventPost` typing (`the_tap_hears_the_key_go_down_and_up`), which needs Input Monitoring and Accessibility for the terminal, not yet run with them |
 
 Where none of these works, as on a wlroots desktop such as Sway, which has no
 GlobalShortcuts, the window's own key events stand in, so the key works while
 Yapfast is in front, and settings say so, as Discord's browser client does.
 Losing the focus lets the key go. The watcher runs while push to talk is on and
 a key is set, in calls or not, and with the window closed to the tray: a thread
-blocked on the X server or in the hook's message loop, or the portal's task on
-the network runtime. The ignored tests above, and
+blocked on the X server, in the hook's message loop or in the tap's run loop,
+or the portal's task on the network runtime. The ignored tests above, and
 `push_to_talk_sends_only_while_the_key_is_held` against the fake Discord, which
 checks that beeps with the key up send nothing and with it held do, run by
 hand; see their comments for what each needs.
