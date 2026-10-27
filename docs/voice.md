@@ -187,7 +187,9 @@ mentions at 0%.
 WebRTC's PulseAudio devices report no GUID, and LiveKit selects devices only by
 GUID, which would always choose the first device. Yapfast names such devices
 `name:` and their reported name, and selects them by their current index
-instead.
+instead. On macOS WebRTC lists the default device first, with the GUID
+`default`, and the others with their Core Audio `AudioObjectID` in decimal,
+which `audio_io` opens directly.
 
 A call's own speakers and microphone, and a watched stream's sound, outlast
 their device (`audio_io::LastingOutput` and `LastingInput`). Bluetooth
@@ -199,7 +201,8 @@ moves there if that's another one. On PulseAudio that endpoint is the
 sink's or source's name with its index, which a device gets anew each time
 it comes back, so even a short gap brings the stream back. On Windows it's
 the endpoint id, the default's while the chosen device is gone, so the
-default also follows Windows when it changes. While nothing opens, the
+default also follows Windows when it changes; macOS works the same way with
+the device's Core Audio UID. While nothing opens, the
 stream keeps time with silence and tries again every half second. Settings
 show a chosen device that isn't connected last in its list, as "(not
 connected)", by the name it was last listed with; the call plays on the
@@ -257,7 +260,8 @@ The input menu's level meter reads the chosen microphone locally through
 works while muted, outside calls and in the preview, and it never touches the
 call: muted, nothing is published or sent. It shows as "Input level" in the
 system's recording streams on Linux. On Windows it reads the microphone
-through WASAPI.
+through WASAPI, and on macOS through Core Audio, which needs the Microphone
+permission; without it macOS hands over silence.
 
 ## Run the local demo
 

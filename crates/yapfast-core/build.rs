@@ -71,6 +71,11 @@ fn main() {
         for framework in ["AVFoundation", "CoreMedia", "CoreVideo", "Foundation"] {
             println!("cargo:rustc-link-lib=framework={framework}");
         }
+        // libwebrtc's Objective-C categories load only with -ObjC, which
+        // webrtc-sys passes for its own targets alone; without it this
+        // crate's tests abort as LiveKit makes its first peer connection
+        // factory (+[RTCVideoEncoderVP9 scalabilityModes]).
+        println!("cargo:rustc-link-arg=-ObjC");
     }
     println!("cargo::rustc-check-cfg=cfg(hwenc)");
     println!("cargo::rustc-check-cfg=cfg(hevcdec)");

@@ -14,8 +14,8 @@ Scope for the beta:
 Clicking a voice channel joins through the same voice dock and one-call rule as
 Matrix voice. Calls start with the microphone on unless Settings turns that
 off, mute and deafen show in Discord, and a voice gate sends audio only during
-speech. Audio goes through `audio_io.rs`, PulseAudio on Linux and WASAPI on
-Windows, and libwebrtc's processing module; see the [Windows
+speech. Audio goes through `audio_io.rs`, PulseAudio on Linux, WASAPI on Windows
+and Core Audio on macOS, and libwebrtc's processing module; see the [Windows
 guide](../windows-beta.md#discord-voice-on-windows) for what's been checked there.
 davey's change for Go Live groups is described in
 `vendor/davey/README.yapfast.md`.

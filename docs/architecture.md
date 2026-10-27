@@ -165,7 +165,8 @@ other applications play for Go Live. It opens a microphone or speakers by the
 device id LiveKit lists, `None` being the system's default, and reads or writes
 on the caller's thread in the caller's own buffers. On Linux that's
 PulseAudio, or PipeWire's PulseAudio server; on Windows it's WASAPI in shared
-mode, with WebRTC's device ids naming its endpoints.
+mode, with WebRTC's device ids naming its endpoints; on macOS it's Core
+Audio's HAL output unit, one per stream, fed through a lock-free ring.
 
 Each `ChatRoom` carries its `network` and its `capabilities`, such as
 whether its messages can be forwarded or its channels sit under

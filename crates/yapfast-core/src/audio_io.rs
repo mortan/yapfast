@@ -6,8 +6,9 @@
 //! room in the speakers' queue. Samples go to the system as they are, with no
 //! copy of their own.
 //!
-//! Linux goes through PulseAudio, or PipeWire's PulseAudio server, and
-//! Windows through WASAPI. Other systems have no sound here yet.
+//! Linux goes through PulseAudio, or PipeWire's PulseAudio server, Windows
+//! through WASAPI, and macOS through Core Audio. Other systems have no sound
+//! here yet.
 
 use std::{marker::PhantomData, time::Duration};
 #[cfg(all(feature = "discord", any(target_os = "linux", target_os = "windows")))]
@@ -28,9 +29,14 @@ mod wasapi;
 #[cfg(target_os = "windows")]
 use wasapi as platform;
 
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(target_os = "macos")]
+mod coreaudio;
+#[cfg(target_os = "macos")]
+use coreaudio as platform;
+
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod unsupported;
-#[cfg(not(any(target_os = "linux", target_os = "windows")))]
+#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 use unsupported as platform;
 
 #[cfg(feature = "discord")]
@@ -39,7 +45,11 @@ mod lasting;
 pub use lasting::{LastingInput, LastingOutput};
 
 /// Whether this system has sound here.
-pub const AVAILABLE: bool = cfg!(any(target_os = "linux", target_os = "windows"));
+pub const AVAILABLE: bool = cfg!(any(
+    target_os = "linux",
+    target_os = "windows",
+    target_os = "macos"
+));
 
 /// The rate every stream runs at, unless it asks for another.
 pub const RATE: u32 = 48_000;
@@ -76,13 +86,13 @@ impl Format {
         }
     }
 
-    #[cfg(any(target_os = "linux", target_os = "windows", test))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
     pub fn frame_bytes(self) -> usize {
         usize::from(self.channels) * if self.float { 4 } else { 2 }
     }
 
     /// The bytes `duration` of this takes.
-    #[cfg(any(target_os = "linux", target_os = "windows", test))]
+    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
     pub fn bytes(self, duration: Duration) -> usize {
         (u128::from(self.rate) * duration.as_micros() / 1_000_000) as usize * self.frame_bytes()
     }
