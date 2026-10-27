@@ -32,7 +32,7 @@ import { EmojiCell, EmojiRow, EmojiSection, MessageRow, ReactionToggle, EmojiBut
 import { SettingsRow, SettingsScreen, AccountSettings, AppearanceSettings, ThemeCard, ThemeColour, VoiceSettings, MessageSettings, NotificationSettings, SoundSettings, AdvancedSettings, DiscordLinkSettings, DiscordSettings, BlockedRow, GameActivitySettings, GameExecutable } from "settings.slint";
 import { MemberRow, ProfileData, ProfileServerRow, MemberPanel, ProfileCard, ServerCard, RoleCard } from "people.slint";
 import { RequestRow, FriendRow, FriendsScreen, HeaderTab, RequestsScreen, AddFriendDialog } from "friends.slint";
-import { ContactRow, ForwardRow, ReactionPill, ReactorRow, StatusDialog, NewDmDialog, ForwardDialog, ReactionsDialog, StatusMenu, PersonPrompt, PersonDialog, LeavingDialog, PollAnswerDraft, PollDialog } from "dialogs.slint";
+import { ContactRow, PlaceRow, ReactionPill, ReactorRow, StatusDialog, NewDmDialog, ForwardDialog, QuickSwitcher, ReactionsDialog, StatusMenu, PersonPrompt, PersonDialog, LeavingDialog, PollAnswerDraft, PollDialog } from "dialogs.slint";
 import { InvitePrompt, InviteDialog, JoinPrompt, JoinDialog, ChannelPrompt, ChannelDialog, ProfileEditorPrompt, ProfileEditorDialog } from "server.slint";
 import { SignInScreen, VerifyBanner } from "sign-in.slint";
 import { BoostPicture, BoostPrompt, EngagementPrompt, ServerProfilePrompt, ServerSettingsPrompt, ServerSettingsScreen } from "server_settings.slint";
@@ -55,7 +55,7 @@ export { StagedFile, MentionRow } from "composer.slint";
 export { EmojiCell, EmojiRow, EmojiSection, ReactionChip, ImageCell, FileCell, EmbedField, EmbedFieldRow, EmbedCard, CardButtonStyle, CardButton, TextBlock, CardRowKind, CardRow, ComponentCard, MessageRow, VideoPlayer, PollAction, PollAnswerRow, PollCard, Polls } from "messages.slint";
 export { MemberRow, ProfileRole, ProfileRoleRow, ProfileServerRow, ProfileFriendRow, ProfileData, ActivityRow, ActivityClock } from "people.slint";
 export { RequestRow, FriendRow } from "friends.slint";
-export { ContactRow, ForwardRow, ReactionPill, ReactorRow, PollAnswerDraft } from "dialogs.slint";
+export { ContactRow, PlaceRow, ReactionPill, ReactorRow, PollAnswerDraft } from "dialogs.slint";
 export { FoundRow, PickRow } from "header.slint";
 export { GifTile, GifFavorites } from "gifs.slint";
 
@@ -627,7 +627,7 @@ export component YapfastWindow inherits Window {
     in property <string> viewer-item;
     in property <int> viewer-index;
     in property <string> forward-preview;
-    in property <[ForwardRow]> forward-targets;
+    in property <[PlaceRow]> forward-targets;
     in-out property <string> forward-query;
     in-out property <string> forward-note;
     in property <int> forward-chosen;
@@ -635,6 +635,15 @@ export component YapfastWindow inherits Window {
     in property <string> forward-empty;
     in property <string> forward-slowmode;
     in property <string> forward-error;
+    /// The quick switcher, open from Ctrl+K until it goes somewhere, and
+    /// where it may go.
+    in property <bool> switcher-open;
+    // However it closes, the composer has the focus again, as in Discord.
+    changed switcher-open => {
+        if !self.switcher-open { root.focus-composer(); }
+    }
+    in property <[PlaceRow]> switcher-places;
+    in-out property <string> switcher-query;
     /// The platform's color emoji font, so reactions do not fall back to outline glyphs.
     in property <string> emoji-font;
     in-out property <string> homeserver: "https://matrix.org";
@@ -1241,6 +1250,9 @@ export component YapfastWindow inherits Window {
     callback forward-send(string);
     callback forward-search;
     callback close-forward;
+    callback switcher-search(string);
+    callback switch-to(string);
+    callback close-switcher;
     callback visit-leaving-link;
     callback close-leaving-link;
     callback confirm-delete-message;
@@ -3849,6 +3861,15 @@ export component YapfastWindow inherits Window {
                 }
             }
         }
+    }
+    // Discord's quick switcher; see QuickSwitcher.
+    switcher-motion := PopupMotion { open: root.switcher-open; }
+    if switcher-motion.shown: QuickSwitcher {
+        motion: switcher-motion.amount;
+        switcher-places: root.switcher-places; switcher-query <=> root.switcher-query;
+        switcher-search(query) => { root.switcher-search(query); }
+        switch-to(id) => { root.switch-to(id); }
+        close-switcher => { root.close-switcher(); }
     }
     // Over everything, as the request it confirms may come from anywhere.
     mfa-motion := PopupMotion { open: root.mfa-open; }

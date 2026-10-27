@@ -24,7 +24,6 @@ mod channel_settings;
 mod compose;
 mod discord_account;
 mod forum;
-mod forward_places;
 mod gifs;
 mod header;
 mod join;
@@ -32,6 +31,7 @@ mod members;
 mod messages;
 mod mfa;
 mod new_post;
+mod place_search;
 mod places;
 mod polls;
 mod preview;
@@ -58,6 +58,7 @@ pub use members::{BAN_HISTORY, RoleChoice, TIMEOUT_TIMES};
 pub use members::{member_server, with_clubs};
 pub use mfa::MfaPrompt;
 pub use new_post::{NewPost, POST_TAGS, POST_TITLE_LIMIT};
+pub use place_search::Place;
 pub use places::{
     ChannelAsk, ChannelDialog, INVITE_AGES, INVITE_USES, InviteDialog, LeaveDialog, ListedCategory,
     SLOWMODES,
@@ -301,8 +302,9 @@ pub struct Forwarding {
     pub pinned: Vec<String>,
 }
 
-/// The Discord conversations this account used, which rank where a message
-/// is forwarded; see [`AppState::forward_places`].
+/// The conversations this account used, which rank where a message is
+/// forwarded and where the quick switcher goes; see
+/// [`AppState::forward_places`] and [`AppState::switcher_places`].
 #[derive(Default)]
 pub struct PlacesUsed {
     /// By Discord server or channel id, as Discord's clients counted them,
@@ -311,12 +313,14 @@ pub struct PlacesUsed {
     /// This session's uses, by channel id, added again to each count that
     /// comes.
     pending: Vec<(String, u64)>,
-    /// The Discord conversations opened this session, the latest first, up
-    /// to eight.
+    /// The conversations opened this session, of every network, the latest
+    /// first, up to sixteen.
     visited: Vec<String>,
     /// Discord's counts came, or were asked for.
     fresh: bool,
     asked: bool,
+    /// Counts changes to the counts and to those opened lately.
+    changes: u64,
 }
 
 /// A forward sent, until each conversation it went to answers.
@@ -576,6 +580,8 @@ pub struct AppState {
     /// A message being forwarded, while its dialog is open.
     pub forwarding: Option<Forwarding>,
     pub places_used: PlacesUsed,
+    /// What the quick switcher searches for, while it's open.
+    pub switcher: Option<String>,
     pub new_dm: Option<NewDm>,
     /// The selected DM's pinned messages, a search of it, and adding friends
     /// to it, each while it's open.
@@ -697,6 +703,32 @@ impl AppState {
     pub fn one_to_one(&self) -> Option<&ChatRoom> {
         self.selected_room()
             .filter(|room| room.direct && room.members <= 2 && room.person.is_some())
+    }
+
+    /// A dialog that takes the keyboard is open, over which the quick
+    /// switcher doesn't open.
+    fn dialog_open(&self) -> bool {
+        !self.mfa.is_empty()
+            || self.forwarding.is_some()
+            || self.new_dm.is_some()
+            || self.add_friend.is_some()
+            || self.status_editor.is_some()
+            || self.person_dialog.is_some()
+            || self.invite.is_some()
+            || self.join.is_some()
+            || self.channel_dialog.is_some()
+            || self.leave.is_some()
+            || self.move_sync.is_some()
+            || self.profile_editor.is_some()
+            || self.server_settings.is_some()
+            || self.channel_settings.is_some()
+            || self.poll_draft.is_some()
+            || self.confirm_delete.is_some()
+            || self.confirm_end_poll.is_some()
+            || self.reactions.is_some()
+            || self.add_people.is_some()
+            || self.switch_voice.is_some()
+            || self.viewer.is_some()
     }
 
     pub fn in_scope(&self, room: &ChatRoom) -> bool {
@@ -1242,6 +1274,13 @@ pub enum Action {
     /// Forward it to those chosen, with this message added.
     Forward(String),
     CloseForward,
+    /// Open the quick switcher, or close it if it's open.
+    ToggleSwitcher,
+    /// Search the places it goes to.
+    SearchSwitcher(String),
+    /// Go to a conversation or server it found, and close it.
+    SwitchTo(String),
+    CloseSwitcher,
     ConfirmDelete,
     CancelDelete,
     Retry(String),
@@ -2451,6 +2490,18 @@ impl Application {
             Action::Forward(note) => self.forward(note),
             Action::CloseForward => {
                 self.state.forwarding = None;
+                vec![]
+            }
+            Action::ToggleSwitcher => self.toggle_switcher(),
+            Action::SearchSwitcher(query) => {
+                if let Some(switcher) = &mut self.state.switcher {
+                    *switcher = query;
+                }
+                vec![]
+            }
+            Action::SwitchTo(id) => self.switch_to(id),
+            Action::CloseSwitcher => {
+                self.state.switcher = None;
                 vec![]
             }
             Action::CancelDelete => {

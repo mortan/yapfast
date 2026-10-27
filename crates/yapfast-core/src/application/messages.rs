@@ -108,14 +108,8 @@ impl Application {
             });
         // Discord's dialog ranks places by how much they're used, which
         // Discord's settings count.
-        if self.state.forwarding.is_some()
-            && discord
-            && !self.state.preview
-            && self.state.places_used.ask()
-        {
-            return vec![Effect::Backend(Command::Discord(
-                DiscordCommand::PlacesUsed,
-            ))];
+        if self.state.forwarding.is_some() && discord {
+            return self.ask_places_used();
         }
         vec![]
     }

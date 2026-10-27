@@ -35,6 +35,20 @@ errors make it taller than the minimum window. SSO and OAuth are still pending.
 - Flatten channels in joined subspaces, deduplicate shared links, and tolerate
   cyclic Space relationships. A shared channel can appear in multiple servers.
   Removed child links update the channel list during sync.
+- Ctrl+K opens the quick switcher, "Where would you like to go?", as in
+  Discord, wherever the focus is, but not over the settings or a dialog;
+  Ctrl+K again, Escape or a click outside closes it, and the composer has
+  the focus again. A keyboard layout without Latin letters uses the key in
+  K's place. Before a search it lists the last eight conversations opened
+  this session, of either network, then the Discord places this account
+  uses most, fifteen at most and not the one open. A search lists up to 50
+  conversations and servers, ranked as Forward To ranks them
+  ([Forwarding](discord/messages.md#forwarding)), and those as good by name;
+  `@` finds people, `#` text channels, `!` voice channels and `*` servers.
+  Channels this account may not read stay out, and so do message requests.
+  The arrow keys or Tab choose, and Enter or a click goes there: a server
+  opens on its channel shown last. Unread places show bold, and mentions as
+  a count.
 - Restore each server's last selected channel and the last selected DM. Yapfast
   keeps each server's channel in `layout.json`, so after a restart a server
   opens its last channel; a server opened for the first time shows its top one.

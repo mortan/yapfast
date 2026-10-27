@@ -196,6 +196,53 @@ impl SidebarShown {
     }
 }
 
+impl Icons {
+    /// A conversation's icon, as the sidebar shows it.
+    fn room(&self, room: &yapfast_core::chat::ChatRoom) -> slint::Image {
+        if room.locked {
+            self.lock.clone()
+        } else if room.voice {
+            self.voice.clone()
+        } else if room.forum {
+            self.forum.clone()
+        } else if room.direct {
+            self.dm.clone()
+        } else if room.parent.is_some() {
+            self.thread.clone()
+        } else {
+            self.text.clone()
+        }
+    }
+}
+
+/// What the quick switcher listed last, so its places are found again only
+/// once that changes.
+pub(super) struct SwitcherShown {
+    query: String,
+    list_changes: u64,
+    places_used: u64,
+    selected: Option<String>,
+}
+
+impl SwitcherShown {
+    fn of(state: &AppState) -> Self {
+        Self {
+            query: state.switcher.clone().unwrap_or_default(),
+            list_changes: state.list_changes,
+            places_used: state.places_used.changes(),
+            selected: state.selected.clone(),
+        }
+    }
+
+    /// Whether the switcher would list the same.
+    fn shows(&self, state: &AppState) -> bool {
+        state.switcher.as_ref() == Some(&self.query)
+            && self.list_changes == state.list_changes
+            && self.places_used == state.places_used.changes()
+            && self.selected == state.selected
+    }
+}
+
 impl Adapter {
     /// Shows what a burst of backend events can have changed.
     pub(super) fn show(&mut self, window: &YapfastWindow, reach: Reach) {
@@ -639,17 +686,7 @@ impl Adapter {
                     name: room.name.clone().into(),
                     category: folds_by.unwrap_or(&heading).into(),
                     heading: heading.into(),
-                    icon: if room.locked {
-                        self.icons.lock.clone()
-                    } else if room.voice {
-                        self.icons.voice.clone()
-                    } else if room.forum {
-                        self.icons.forum.clone()
-                    } else if room.direct {
-                        self.icons.dm.clone()
-                    } else {
-                        self.icons.text.clone()
-                    },
+                    icon: self.icons.room(room),
                     selected: Some(&room.id) == state.selected.as_ref(),
                     unread: room.unread > 0,
                     badge: mention_badge(room),
@@ -2111,7 +2148,8 @@ impl Adapter {
         });
     }
 
-    /// The dialogs for adding a friend, the custom status, a new DM and forwarding.
+    /// The dialogs for adding a friend, the custom status, a new DM and
+    /// forwarding, and the quick switcher.
     fn show_dialogs(&mut self, window: &YapfastWindow) {
         let state = &self.app.state;
         let add_friend = state.add_friend.as_ref();
@@ -2268,38 +2306,81 @@ impl Adapter {
                 state
                     .forward_places()
                     .into_iter()
-                    .map(|room| {
-                        // A channel shows its server's icon, as Discord's dialog does.
-                        let server = state
-                            .servers
-                            .iter()
-                            .find(|server| !room.direct && server.channels.contains(&room.id));
-                        ForwardRow {
-                            id: room.id.clone().into(),
-                            name: room.name.clone().into(),
-                            place: match server {
-                                _ if room.direct => "Direct message".into(),
-                                Some(server) => server.name.clone().into(),
-                                None => "Channel".into(),
-                            },
-                            icon: if room.direct {
-                                self.icons.dm.clone()
-                            } else {
-                                self.icons.text.clone()
-                            },
-                            avatar: room.direct || server.is_some(),
-                            initial: initial(server.map_or(&room.name, |server| &server.name)),
-                            tint: tint(server.map_or(&room.id, |server| &server.id)),
-                            picture_url: server
-                                .map_or(room.avatar.as_deref(), |server| server.icon.as_deref())
-                                .unwrap_or_default()
-                                .into(),
-                            chosen: forwarding.chosen.contains(&room.id),
-                        }
+                    .map(|room| PlaceRow {
+                        chosen: forwarding.chosen.contains(&room.id),
+                        ..self.place_row(room, true)
                     })
                     .collect()
             }),
         );
+        window.set_switcher_open(state.switcher.is_some());
+        if self
+            .switcher
+            .as_ref()
+            .is_some_and(|shown| shown.shows(state))
+        {
+            return;
+        }
+        self.switcher = state.switcher.as_ref().map(|_| SwitcherShown::of(state));
+        if let Some(query) = &state.switcher
+            && window.get_switcher_query() != query.as_str()
+        {
+            window.set_switcher_query(query.as_str().into());
+        }
+        update_model(
+            &self.models.switcher_places,
+            state
+                .switcher_places()
+                .into_iter()
+                .map(|place| match place {
+                    Place::Room(room) => PlaceRow {
+                        unread: room.unread > 0 && !room.muted,
+                        badge: mention_badge(room),
+                        ..self.place_row(room, false)
+                    },
+                    Place::Server(server) => PlaceRow {
+                        id: server.id.clone().into(),
+                        name: server.name.clone().into(),
+                        place: "Server".into(),
+                        avatar: true,
+                        initial: initial(&server.name),
+                        tint: tint(&server.id),
+                        picture_url: server.icon.clone().unwrap_or_default().into(),
+                        ..PlaceRow::default()
+                    },
+                })
+                .collect(),
+        );
+    }
+
+    /// A conversation as Forward To and the quick switcher list it: a DM by
+    /// its picture, and a channel by its server's icon in Forward To, as
+    /// Discord's dialog shows it, or else by its own.
+    fn place_row(&self, room: &yapfast_core::chat::ChatRoom, server_icon: bool) -> PlaceRow {
+        let state = &self.app.state;
+        let server = state
+            .servers
+            .iter()
+            .find(|server| !room.direct && server.channels.contains(&room.id));
+        let icon = server.filter(|_| server_icon);
+        PlaceRow {
+            id: room.id.clone().into(),
+            name: room.name.clone().into(),
+            place: match server {
+                _ if room.direct => "Direct message".into(),
+                Some(server) => server.name.clone().into(),
+                None => "Channel".into(),
+            },
+            icon: self.icons.room(room),
+            avatar: room.direct || icon.is_some(),
+            initial: initial(icon.map_or(&room.name, |server| &server.name)),
+            tint: tint(icon.map_or(&room.id, |server| &server.id)),
+            picture_url: icon
+                .map_or(room.avatar.as_deref(), |server| server.icon.as_deref())
+                .unwrap_or_default()
+                .into(),
+            ..PlaceRow::default()
+        }
     }
 
     /// The composer: what it may do, its files, its reply or edit, mentions and

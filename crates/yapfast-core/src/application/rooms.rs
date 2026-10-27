@@ -467,6 +467,32 @@ impl Application {
         effects
     }
 
+    /// Opens the quick switcher with nothing searched for, unless a dialog
+    /// has the keyboard, or closes it.
+    pub(super) fn toggle_switcher(&mut self) -> Vec<Effect> {
+        if self.state.switcher.take().is_some() || self.state.dialog_open() {
+            return vec![];
+        }
+        self.state.switcher = Some(String::new());
+        // It ranks places by how much they're used, which Discord's
+        // settings count.
+        if self.state.discord_linked {
+            return self.ask_places_used();
+        }
+        vec![]
+    }
+
+    /// Goes where the quick switcher found: to a server's channel shown
+    /// last, or to a conversation.
+    pub(super) fn switch_to(&mut self, id: String) -> Vec<Effect> {
+        self.state.switcher = None;
+        if self.state.servers.iter().any(|server| server.id == id) {
+            self.navigate(Navigation::Server(id))
+        } else {
+            self.open(id, false)
+        }
+    }
+
     /// Switches the selected voice channel between its chat and its call.
     pub(super) fn show_voice_chat(&mut self, chat: bool) -> Vec<Effect> {
         match self.state.selected.clone() {

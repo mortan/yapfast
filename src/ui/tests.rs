@@ -1872,6 +1872,46 @@ fn forwarding_and_frequent_reactions_reach_the_window() {
 }
 
 #[test]
+fn the_quick_switcher_reaches_the_window() {
+    i_slint_backend_testing::init_no_event_loop();
+    let directory = tempfile::tempdir().unwrap();
+    let window = YapfastWindow::new().unwrap();
+    let adapter = Adapter::new(
+        Arc::new(BackgroundRuntime::new().unwrap()),
+        directory.path().into(),
+        &window,
+    )
+    .unwrap();
+    bind_callbacks(&window, &adapter);
+    window.invoke_explore_preview();
+    // Ctrl+K, which the native window's events carry.
+    adapter.borrow_mut().action(&window, Action::ToggleSwitcher);
+    assert!(window.get_switcher_open());
+    assert_eq!(window.get_switcher_query(), "");
+    window.invoke_switcher_search("gam".into());
+    let places = window.get_switcher_places();
+    let games = places.iter().find(|place| place.id == "games").unwrap();
+    assert!(!games.avatar, "a channel shows its own icon");
+    assert_eq!(games.place, "Friends");
+    window.invoke_switcher_search("*fri".into());
+    let places = window.get_switcher_places();
+    assert_eq!(places.row_count(), 1);
+    let server = places.row_data(0).unwrap();
+    assert_eq!((server.name.as_str(), server.avatar), ("Friends", true));
+    window.invoke_switch_to("games".into());
+    assert!(!window.get_switcher_open());
+    assert_eq!(
+        adapter.borrow().app.state.selected.as_deref(),
+        Some("games")
+    );
+    // Opened again, it starts afresh.
+    adapter.borrow_mut().action(&window, Action::ToggleSwitcher);
+    assert_eq!(window.get_switcher_query(), "");
+    window.invoke_close_switcher();
+    assert!(!window.get_switcher_open());
+}
+
+#[test]
 fn scrolling_up_leaves_the_latest_message() {
     i_slint_backend_testing::init_no_event_loop();
     let window = YapfastWindow::new().unwrap();

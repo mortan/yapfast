@@ -302,6 +302,7 @@ pub(super) fn bind_callbacks(window: &YapfastWindow, adapter: &Rc<RefCell<Adapte
         });
     }
     bind!(on_close_forward, Action::CloseForward);
+    bind!(on_close_switcher, Action::CloseSwitcher);
     bind!(on_dismiss_notice, Action::DismissNotice);
     bind!(on_close_image, Action::CloseImage);
     {
@@ -435,6 +436,8 @@ pub(super) fn bind_callbacks(window: &YapfastWindow, adapter: &Rc<RefCell<Adapte
     bind_item!(on_start_forward, Action::StartForward);
     bind_item!(on_forward_choose, Action::ChooseForward);
     bind_item!(on_forward_send, Action::Forward);
+    bind_item!(on_switcher_search, Action::SearchSwitcher);
+    bind_item!(on_switch_to, Action::SwitchTo);
     bind!(on_open_new_dm, Action::OpenNewDm);
     bind!(on_open_add_friend, Action::OpenAddFriend);
     bind!(on_open_requests, Action::OpenDmScreen(DmScreen::Requests));

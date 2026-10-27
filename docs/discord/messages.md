@@ -465,10 +465,11 @@ session; then those this account uses most. It shows fifteen at most, and
 not the conversation the message is in, unless it's chosen. "Uses most" is
 Discord's frecency: `guild_and_channel_frecency`, field 12 of the
 `FrecencyUserSettings` that GET `/users/@me/settings-proto/2` returns,
-fetched when a Discord message is first forwarded and kept up to date by
-USER_SETTINGS_PROTO_UPDATE. It maps each channel's id to how often it
-was used and the times of the last ten uses. A use counts 100 on its day,
-70 a day later, 50 at two or three days, 30 up to a week, then 10; a
+fetched when a Discord message is first forwarded or the quick switcher
+first opens ([chat UI](../chat-ui.md#implemented-behavior)), and kept up
+to date by USER_SETTINGS_PROTO_UPDATE. It maps each channel's id to how
+often it was used and the times of the last ten uses. A use counts 100 on
+its day, 70 a day later, 50 at two or three days, 30 up to a week, then 10; a
 place's frecency is its uses in all times that sum, over the number of
 recent uses. Each conversation opened in Yapfast counts as a use, added
 again to each count that comes, as Discord's client does until it saves

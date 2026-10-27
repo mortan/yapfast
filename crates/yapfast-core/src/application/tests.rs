@@ -596,6 +596,112 @@ fn discord_forwards_list_places_as_discords_dialog_does() {
 }
 
 #[test]
+fn the_quick_switcher_finds_places_as_discords_does() {
+    // Matrix rooms, with a Space as the server.
+    let mut app = connected();
+    app.state.rooms.extend(
+        [
+            ChatRoom {
+                locked: true,
+                ..preview_room("staff", "staff", false, 3)
+            },
+            ChatRoom {
+                category: crate::discord::REQUESTS.into(),
+                request: true,
+                ..preview_room("request", "Ronja", true, 2)
+            },
+        ]
+        .map(Arc::new),
+    );
+    app.dispatch(Action::Open("dm".into()));
+    app.dispatch(Action::Open("games".into()));
+    app.dispatch(Action::Open("general".into()));
+    let listed = |app: &Application| -> Vec<String> {
+        app.state
+            .switcher_places()
+            .iter()
+            .map(|place| place.name().to_owned())
+            .collect()
+    };
+    assert!(listed(&app).is_empty(), "closed");
+    app.dispatch(Action::ToggleSwitcher);
+    // Those opened lately, but not the one open.
+    assert_eq!(listed(&app), ["games", "DM"]);
+    // A search finds servers too, those as good by name, but not what this
+    // account can't read, nor message requests.
+    app.dispatch(Action::SearchSwitcher("s".into()));
+    assert_eq!(listed(&app), ["Friends", "games"]);
+    app.dispatch(Action::SearchSwitcher("g".into()));
+    assert_eq!(listed(&app), ["games", "general", "Lounge"]);
+    app.dispatch(Action::SearchSwitcher("ronja".into()));
+    assert!(listed(&app).is_empty());
+    app.dispatch(Action::SearchSwitcher("#g".into()));
+    assert_eq!(listed(&app), ["games", "general"]);
+    app.dispatch(Action::SearchSwitcher("!".into()));
+    assert_eq!(listed(&app), ["Lounge", "Party"]);
+    app.dispatch(Action::SearchSwitcher("*f".into()));
+    assert_eq!(listed(&app), ["Friends"]);
+    // Going to a place closes it; a server shows its channel shown last.
+    app.dispatch(Action::SwitchTo("dm".into()));
+    assert!(app.state.switcher.is_none());
+    assert_eq!(app.state.navigation, Navigation::DirectMessages);
+    assert_eq!(app.state.selected.as_deref(), Some("dm"));
+    app.dispatch(Action::ToggleSwitcher);
+    app.dispatch(Action::SwitchTo("friends".into()));
+    assert_eq!(app.state.navigation, Navigation::Server("friends".into()));
+    assert_eq!(app.state.selected.as_deref(), Some("general"));
+    app.dispatch(Action::ToggleSwitcher);
+    app.dispatch(Action::ToggleSwitcher);
+    assert!(app.state.switcher.is_none());
+    // A dialog keeps the keyboard.
+    app.dispatch(Action::OpenNewDm);
+    assert!(app.state.new_dm.is_some());
+    app.dispatch(Action::ToggleSwitcher);
+    assert!(app.state.switcher.is_none());
+}
+
+#[test]
+fn discord_forwards_list_eight_places_opened_lately_that_can_take_them() {
+    let mut app = connected();
+    let channel = |id: u32| ChatRoom {
+        id: crate::discord::room_id("10", &id.to_string()),
+        name: format!("c{id}"),
+        network: Network::Discord,
+        capabilities: Network::Discord.capabilities(),
+        ..preview_room("x", "x", false, 3)
+    };
+    app.state.rooms = (11..=20).map(channel).map(Arc::new).collect();
+    app.state.discord_online = true;
+    // Matrix rooms opened in between take room among those kept, but not
+    // among those listed.
+    for id in 11..=20 {
+        let room = crate::discord::room_id("10", &id.to_string());
+        app.state.places_used.visit(&room, crate::clock::now_ms());
+        app.state
+            .places_used
+            .visit(&format!("!m{id}:test"), crate::clock::now_ms());
+    }
+    app.state.selected = Some(crate::discord::room_id("10", "20"));
+    let mut sent = message("d:5", false);
+    sent.can_forward = true;
+    app.state.messages = Arc::new(timeline(vec![sent]));
+    app.dispatch(Action::StartForward("d:5".into()));
+    let listed: Vec<String> = app
+        .state
+        .forward_places()
+        .iter()
+        .map(|room| room.name.clone())
+        .collect();
+    // Those opened lately but the message's own, then the others used.
+    assert_eq!(
+        listed,
+        [
+            "c19", "c18", "c17", "c16", "c15", "c14", "c13", "c11", "c12"
+        ]
+    );
+}
+
+#[test]
 fn room_membership_loss_moves_selection_and_server_loss_returns_to_dms() {
     let mut app = connected();
     app.dispatch(Action::Navigate(Navigation::Server("friends".into())));

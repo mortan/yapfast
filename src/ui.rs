@@ -16,8 +16,8 @@ use yapfast_core::{
     application::{
         Action, AddFriend, AppState, Application, BAN_HISTORY, ChannelAsk, ChannelInput,
         ClearAfter, Compose, DmScreen, Effect, INVITE_AGES, INVITE_USES, ListedCategory,
-        MenuChoice, Navigation, NewDm, PersonAsk, ProfileText, ProfileView, Relation, RoleInput,
-        Search, TIMEOUT_TIMES,
+        MenuChoice, Navigation, NewDm, PersonAsk, Place, ProfileText, ProfileView, Relation,
+        RoleInput, Search, TIMEOUT_TIMES,
     },
     backend::Backend,
     chat::{
@@ -65,7 +65,7 @@ use messages::*;
 pub(crate) use pictures::picture as slint_image;
 use pictures::*;
 use profile::*;
-use refresh::{Reach, SidebarShown};
+use refresh::{Reach, SidebarShown, SwitcherShown};
 use tiles::{Focus, Pip, Stage, Tiles};
 use yapfast_ui::*;
 
@@ -278,15 +278,26 @@ const ZOOM_NOTE: Duration = Duration::from_millis(1200);
 
 /// Follows the native window's focus, for notifications, zooms the window
 /// with Ctrl and +, - and 0 or the scroll wheel, keeping the level in the
-/// layout, and takes files dropped on it.
+/// layout, opens the quick switcher with Ctrl+K, and takes files dropped on
+/// it.
 fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
     use slint::winit_030::{
         EventResult,
         winit::{
-            event::{ElementState, WindowEvent},
-            keyboard::{Key, NamedKey},
+            event::{ElementState, KeyEvent, WindowEvent},
+            keyboard::{Key, KeyCode, NamedKey, PhysicalKey},
         },
     };
+    /// The K key: the letter K in the keyboard's layout, or in a layout
+    /// without Latin letters, the key in its place.
+    fn is_k(key: &KeyEvent) -> bool {
+        match &key.logical_key {
+            Key::Character(text) if text.chars().all(|letter| letter.is_ascii_alphabetic()) => {
+                text.eq_ignore_ascii_case("k")
+            }
+            _ => key.physical_key == PhysicalKey::Code(KeyCode::KeyK),
+        }
+    }
     let saved = zoom::saved(adapter.borrow().layout.zoom);
     let adapter = Rc::downgrade(adapter);
     let (to, weak) = (adapter.clone(), window.as_weak());
@@ -473,6 +484,31 @@ fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
                                 }
                             });
                         }
+                    }
+                    return EventResult::PreventDefault;
+                }
+                // Ctrl+K opens the quick switcher, or closes it, wherever the
+                // focus is, as in Discord; not over the settings or a link
+                // that asks before it opens, which the window keeps. Those
+                // the application keeps, it checks itself.
+                if let WindowEvent::KeyboardInput { event: key, .. } = event
+                    && key.state == ElementState::Pressed
+                    && keys.control_only()
+                    && is_k(key)
+                    && let Some(window) = weak.upgrade()
+                    && window.get_workspace()
+                    && !window.get_settings_open()
+                    && window.get_leaving_link().is_empty()
+                {
+                    if !key.repeat {
+                        let (adapter, weak) = (adapter.clone(), weak.clone());
+                        slint::Timer::single_shot(Duration::ZERO, move || {
+                            if let (Some(adapter), Some(window)) =
+                                (adapter.upgrade(), weak.upgrade())
+                            {
+                                adapter.borrow_mut().action(&window, Action::ToggleSwitcher);
+                            }
+                        });
                     }
                     return EventResult::PreventDefault;
                 }
@@ -1314,7 +1350,8 @@ struct Models {
     /// The picker's sidebar, built with the grid it jumps through.
     emoji_sections: Rc<VecModel<EmojiSection>>,
     emoji_suggestions: Rc<VecModel<EmojiCell>>,
-    forward_targets: Rc<VecModel<ForwardRow>>,
+    forward_targets: Rc<VecModel<PlaceRow>>,
+    switcher_places: Rc<VecModel<PlaceRow>>,
     participants: Rc<VecModel<PersonRow>>,
     /// The GIF picker's tiles.
     gif_tiles: Rc<VecModel<GifTile>>,
@@ -1380,6 +1417,7 @@ impl Models {
         window.set_emoji_sections(ModelRc::from(self.emoji_sections.clone()));
         window.set_emoji_suggestions(ModelRc::from(self.emoji_suggestions.clone()));
         window.set_forward_targets(ModelRc::from(self.forward_targets.clone()));
+        window.set_switcher_places(ModelRc::from(self.switcher_places.clone()));
         window.set_participants(ModelRc::from(self.participants.clone()));
         window.set_gif_tiles(ModelRc::from(self.gif_tiles.clone()));
         window.set_share_viewers(ModelRc::from(self.share_viewers.clone()));
@@ -1493,6 +1531,8 @@ struct Adapter {
     aside_restyle: bool,
     /// What the sidebar showed last, so it's built again only once that changes.
     sidebar: Option<SidebarShown>,
+    /// What the quick switcher listed last, while it's open.
+    switcher: Option<SwitcherShown>,
     /// The room ids of the rows a Discord server's channel list drags and
     /// drops, by their places; see RoomRow.
     places: Vec<String>,
@@ -1737,6 +1777,7 @@ impl Adapter {
                 messages: Arc::new(Vec::new()),
                 rows: Vec::new(),
                 sidebar: None,
+                switcher: None,
                 places: Vec::new(),
                 arranging: None,
                 rail_call: None,
