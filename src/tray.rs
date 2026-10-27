@@ -5,13 +5,18 @@
 
 use std::cell::Cell;
 
-/// What the tray asks for, or says. Each runs on Slint's event loop.
+/// What the tray asks for, or says. Each runs on Slint's event loop. Only
+/// Linux and Windows have a tray yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
+    #[cfg(any(target_os = "linux", windows))]
     Open,
+    #[cfg(any(target_os = "linux", windows))]
     Disconnect,
+    #[cfg(any(target_os = "linux", windows))]
     Quit,
     /// A tray came or went, which decides what closing the window does.
+    #[cfg(any(target_os = "linux", windows))]
     Available,
 }
 
@@ -56,6 +61,7 @@ impl Tray {
 
 /// Yapfast's logo in Yap's marigold, `size` pixels square, with a red dot for
 /// unread messages cut into its corner.
+#[cfg(any(target_os = "linux", windows, test))]
 fn logo(size: u32, unread: bool) -> Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
     let mut svg = include_str!("../ui/icons/logo.svg")
         .replacen(

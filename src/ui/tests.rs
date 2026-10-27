@@ -208,8 +208,9 @@ fn the_composers_menu_cuts_copies_and_pastes_through_the_application() {
     assert_eq!(window.get_draft(), "hello");
     choose(0.);
     choose(2.);
+    // To the end: the right arrow, as End scrolls rather than moves on macOS.
     window.window().dispatch_event(WindowEvent::KeyPressed {
-        text: Key::End.into(),
+        text: Key::RightArrow.into(),
     });
     choose(1.);
     assert_eq!(window.get_draft(), "hellohello", "Select All, then Copy");

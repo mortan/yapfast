@@ -46,12 +46,3 @@ impl Input {
 pub fn endpoint(_: Option<&str>, _: bool) -> String {
     String::new()
 }
-
-#[cfg(feature = "discord")]
-pub fn others(
-    _: fn(&str) -> bool,
-    _: super::Hear,
-    _: std::sync::Arc<std::sync::atomic::AtomicBool>,
-) -> Result<std::thread::JoinHandle<()>> {
-    bail!("Yapfast shares sound on Linux only for now")
-}

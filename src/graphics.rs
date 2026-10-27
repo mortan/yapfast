@@ -7,8 +7,9 @@
 //! turns the setting off. Slint picks one renderer per process and never unloads
 //! the graphics driver, so a changed setting applies when Yapfast restarts.
 //!
-//! Skia GPU draws through OpenGL on Linux and through Direct3D 12 on Windows.
-//! There, NVIDIA's OpenGL driver kept a core busy while Yapfast drew with it.
+//! Skia GPU draws through OpenGL on Linux and macOS, and through Direct3D 12 on
+//! Windows. There, NVIDIA's OpenGL driver kept a core busy while Yapfast drew
+//! with it.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Renderer {

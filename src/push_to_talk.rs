@@ -147,6 +147,7 @@ pub enum Reach {
     Asking,
     /// In every app; with the shortcut the desktop gave it, in its own
     /// words, when it says.
+    #[cfg(any(target_os = "linux", windows))]
     Everywhere(Option<String>),
     /// Only while Yapfast's window has the focus, for this reason, which
     /// the note goes on from.
@@ -158,10 +159,13 @@ impl Reach {
     pub fn note(&self) -> String {
         match self {
             Reach::Asking => "Asking your desktop to let Yapfast use the key in every app...".into(),
+            #[cfg(any(target_os = "linux", windows))]
             Reach::Everywhere(None) => "Hold the key in any app to talk.".into(),
+            #[cfg(any(target_os = "linux", windows))]
             Reach::Everywhere(Some(shortcut)) if shortcut.is_empty() => {
                 "Your desktop hasn't allowed this shortcut yet. Approve it in your system's global shortcuts settings.".into()
             }
+            #[cfg(any(target_os = "linux", windows))]
             Reach::Everywhere(Some(shortcut)) => format!(
                 "Your desktop gave push to talk the shortcut {shortcut}. Hold it in any app to talk; change it in your system's global shortcuts settings."
             ),
@@ -265,6 +269,7 @@ impl Drop for Watcher {
     }
 }
 
+#[cfg(any(target_os = "linux", windows))]
 type Report = Arc<dyn Fn(Reach) + Send + Sync>;
 
 #[cfg(target_os = "linux")]

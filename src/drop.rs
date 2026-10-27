@@ -1,6 +1,6 @@
 //! Files dragged onto the window from a file manager. winit reports them on
-//! X11 and Windows; on Wayland, where winit has no drag and drop, a data
-//! device of Yapfast's own on winit's connection does.
+//! X11, Windows and macOS; on Wayland, where winit has no drag and drop, a
+//! data device of Yapfast's own on winit's connection does.
 
 use std::path::PathBuf;
 
@@ -32,6 +32,9 @@ enum Source {
     X11(x11rb::rust_connection::RustConnection, u32),
     #[cfg(windows)]
     Win32(isize),
+    /// An AppKit window, which doesn't say where the pointer is yet.
+    #[cfg(target_os = "macos")]
+    AppKit,
 }
 
 impl Pointer {
@@ -45,6 +48,8 @@ impl Pointer {
             RawWindowHandle::Xcb(handle) => Self::x11(handle.window.get())?,
             #[cfg(windows)]
             RawWindowHandle::Win32(handle) => Source::Win32(handle.hwnd.get()),
+            #[cfg(target_os = "macos")]
+            RawWindowHandle::AppKit(_) => Source::AppKit,
             _ => return None,
         };
         Some(Self {
@@ -66,13 +71,15 @@ impl Pointer {
 
     /// Where it is now, unless the platform won't say.
     pub fn at(&self) -> Option<Drag> {
-        let (x, y) = match &self.source {
+        let (x, y): (f64, f64) = match &self.source {
             #[cfg(target_os = "linux")]
             Source::X11(connection, window) => {
                 use x11rb::protocol::xproto::ConnectionExt;
                 let pointer = connection.query_pointer(*window).ok()?.reply().ok()?;
-                (f64::from(pointer.win_x), f64::from(pointer.win_y))
+                Some((f64::from(pointer.win_x), f64::from(pointer.win_y)))
             }
+            #[cfg(target_os = "macos")]
+            Source::AppKit => None,
             #[cfg(windows)]
             Source::Win32(hwnd) => {
                 use windows_sys::Win32::Foundation::POINT;
@@ -86,9 +93,9 @@ impl Pointer {
                 {
                     return None;
                 }
-                (f64::from(point.x), f64::from(point.y))
+                Some((f64::from(point.x), f64::from(point.y)))
             }
-        };
+        }?;
         Some(Drag::Moved {
             x: x / self.scale,
             y: y / self.scale,

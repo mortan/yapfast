@@ -57,9 +57,11 @@ prebuilt Skia with Skia's own FreeType: the one built for the system's FreeType
 lacks FreeType's COLRv1 calls, so it drew nothing for the COLRv1 build of Noto
 Color Emoji, the only one Fedora installs. Rust-skia builds that Skia only with
 its text layout, which the linker leaves out, and without Vulkan, so the
-renderer goes without wgpu, whose Vulkan surface needs it. On Linux Yapfast
+renderer goes without wgpu, whose Vulkan surface needs it. macOS goes without
+it too, so Skia GPU draws through OpenGL there. On Linux and macOS Yapfast
 asks for Skia OpenGL or Skia Software by name; the wgpu renderers the winit
-backend still names make surfaces that fail to start. Windows turns wgpu back
+backend still names, Metal among them on macOS, make surfaces that fail to
+start. Windows turns wgpu back
 on through a dependency in Yapfast's own `Cargo.toml`, for Skia GPU on Direct3D
 12 (see `src/graphics.rs`). Each change is marked `Yapfast:` in
 `itemrenderer.rs`, `cached_image.rs`, `lib.rs`, `font_cache.rs` or

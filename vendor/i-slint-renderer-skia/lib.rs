@@ -526,6 +526,11 @@ impl SkiaRenderer {
         Self::new_with_surface_factory(context, no_wgpu_surface_factory, None)
     }
 
+    #[cfg(all(target_vendor = "apple", not(skia_backend_wgpu)))]
+    pub fn default_metal(context: &SkiaSharedContext) -> Self {
+        Self::new_with_surface_factory(context, no_wgpu_surface_factory, None)
+    }
+
     #[cfg(all(target_family = "windows", not(skia_backend_wgpu)))]
     pub fn default_direct3d(context: &SkiaSharedContext) -> Self {
         Self::new_with_surface_factory(context, no_wgpu_surface_factory, None)
