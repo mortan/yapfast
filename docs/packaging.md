@@ -181,4 +181,7 @@ to draw `yapfast.ico` again.
 On macOS the bundle's `packaging/macos/yapfast.icns` is the Dock's and
 Finder's icon. `scripts/make-macos-icon` draws it from `icon.svg` again, at
 each size from 16 to 1024 pixels, with the logo filling 824 of 1024 pixels as
-Apple's icon grid has it, so it matches other apps' icons in the Dock.
+Apple's icon grid has it, so it matches other apps' icons in the Dock. Run
+from outside a bundle, such as from `target/`, Yapfast gives the Dock the
+same logo itself: AppKit draws `icon.svg`, its view box grown to the same
+grid, at the Dock's size (`src/icon.rs`).
