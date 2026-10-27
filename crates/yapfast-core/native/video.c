@@ -1,5 +1,6 @@
 /* Video files: demuxed by FFmpeg's libavformat; pictures decoded by
- * libavcodec (H264), libvpx (VP8, VP9) or dav1d (AV1), and scaled and
+ * libavcodec (H264), or on macOS, whose libavcodec has no H264 decoder, by
+ * VideoToolbox (vtdec.c), libvpx (VP8, VP9) or dav1d (AV1), and scaled and
  * converted to RGBA by libyuv; sound decoded by libavcodec (AAC, Opus, MP3,
  * Vorbis, FLAC, PCM). All of it is inside Yapfast's libwebrtc archive. The
  * caller supplies the file through two functions, so it can arrive while it
@@ -18,8 +19,11 @@
 #include "libyuv/scale.h"
 #include "vpx/vp8dx.h"
 #include "vpx/vpx_decoder.h"
+#ifdef __APPLE__
+#include "vtdec.h"
+#endif
 
-enum { DECODER_AVCODEC, DECODER_VPX, DECODER_DAV1D };
+enum { DECODER_AVCODEC, DECODER_VPX, DECODER_DAV1D, DECODER_VT };
 
 /* The widest or tallest picture Yapfast decodes. A file can claim any size,
  * and each picture would take that much memory. */
@@ -88,6 +92,9 @@ struct yapfast_video {
   Dav1dData dav1d_pending;
   Dav1dPicture dav1d_picture;
   int dav1d_holds;
+#ifdef __APPLE__
+  struct vtdec *vt;
+#endif
   /* The picture yapfast_video_next gave last. */
   struct planes planes;
   int sound_stream;
@@ -152,6 +159,9 @@ void yapfast_video_free(struct yapfast_video *video) {
     dav1d_data_unref(&video->dav1d_pending);
     dav1d_close(&video->dav1d);
   }
+#ifdef __APPLE__
+  vtdec_free(video->vt);
+#endif
   avcodec_free_context(&video->sound_context);
   av_frame_free(&video->sound_frame);
   free(video->samples);
@@ -162,6 +172,21 @@ void yapfast_video_free(struct yapfast_video *video) {
 static int open_decoder(struct yapfast_video *video, const AVCodecParameters *parameters,
                         unsigned threads) {
   switch (parameters->codec_id) {
+#ifdef __APPLE__
+    case AV_CODEC_ID_H264: {
+      /* In presentation order: files have B frames. */
+      video->decoder = DECODER_VT;
+      video->vt = vtdec_new(VTDEC_H264, 1);
+      if (!video->vt) return FAILED;
+      /* Without an avcC record, as in avc3, samples are Annex B. */
+      if (parameters->extradata_size > 0 && parameters->extradata[0] == 1) {
+        int configured =
+            vtdec_configure(video->vt, parameters->extradata, (size_t)parameters->extradata_size);
+        if (configured < 0) return configured == -2 ? UNSUPPORTED : FAILED;
+      }
+      return 0;
+    }
+#else
     case AV_CODEC_ID_H264: {
       const AVCodec *codec = avcodec_find_decoder(parameters->codec_id);
       video->decoder = DECODER_AVCODEC;
@@ -173,6 +198,7 @@ static int open_decoder(struct yapfast_video *video, const AVCodecParameters *pa
       video->context->max_pixels = (int64_t)MAX_SIDE * MAX_SIDE;
       return avcodec_open2(video->context, codec, NULL) < 0 ? FAILED : 0;
     }
+#endif
     case AV_CODEC_ID_VP8:
     case AV_CODEC_ID_VP9: {
       vpx_codec_dec_cfg_t config = {.threads = threads};
@@ -398,6 +424,25 @@ static int receive_picture(struct yapfast_video *video, int64_t *time_ms) {
       *time_ms = milliseconds(video, video->stream, video->vpx_pts);
       return 1;
     }
+#ifdef __APPLE__
+    case DECODER_VT: {
+      struct vtdec_picture picture;
+      int got = vtdec_picture(video->vt, video->sent_all, &picture);
+      if (got <= 0) return got < 0 ? FAILED : 0;
+      *planes = (struct planes){
+          .width = picture.width,
+          .height = picture.height,
+          .depth = 8,
+          .layout = LAYOUT_420,
+          .data = {picture.y, picture.u, picture.v},
+          .stride = {picture.y_stride, picture.u_stride, picture.v_stride},
+          .bt709 = bt709(picture.bt709, picture.height),
+          .full_range = picture.full_range,
+      };
+      *time_ms = milliseconds(video, video->stream, picture.pts);
+      return 1;
+    }
+#endif
     default: {
       if (video->dav1d_holds) {
         dav1d_picture_unref(&video->dav1d_picture);
@@ -540,6 +585,16 @@ static int feed(struct yapfast_video *video) {
       if (sent < 0 && sent != AVERROR_INVALIDDATA) result = FAILED;
       break;
     }
+#ifdef __APPLE__
+    case DECODER_VT: {
+      int decoded = vtdec_decode(video->vt, packet->data, (size_t)packet->size, packet->pts,
+                                 MAX_SIDE);
+      /* A damaged packet is skipped. */
+      if (decoded == -2) result = UNSUPPORTED;
+      if (decoded == -3) result = FAILED;
+      break;
+    }
+#endif
     case DECODER_VPX:
       video->vpx_iter = NULL;
       video->vpx_pts = packet->pts;
@@ -705,6 +760,9 @@ int yapfast_video_seek(struct yapfast_video *video, int64_t time_ms) {
   if (video->context) avcodec_flush_buffers(video->context);
   if (video->sound_context) avcodec_flush_buffers(video->sound_context);
   video->vpx_iter = NULL;
+#ifdef __APPLE__
+  if (video->vt) vtdec_flush(video->vt);
+#endif
   if (video->dav1d) {
     dav1d_data_unref(&video->dav1d_pending);
     if (video->dav1d_holds) {

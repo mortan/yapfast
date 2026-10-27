@@ -239,7 +239,7 @@ Its build script compiles it, and NASM assembles its x86-64 assembly, with
 every symbol prefixed, apart from the FFmpeg in libwebrtc, and it loads
 libva, NVIDIA's driver and AMD's AMF runtime only when an encoder opens.
 Its `README.yapfast.md` explains the rest. Targets without a `gen/` folder build without hardware
-encoding or H265 decoding.
+encoding or H265 decoding from it; macOS decodes H265 with VideoToolbox.
 
 Each has a `README.yapfast.md` with its changes, except the two Slint crates, which
 this section describes. The Slint crates keep their `.rs` files at the crate
@@ -259,15 +259,20 @@ files named here are in `crates/yapfast-core/native/`.
 
 - LiveKit's libwebrtc archive, `$LK_CUSTOM_WEBRTC` in the development shell,
   holds libvpx, dav1d, libyuv and Chromium's FFmpeg, which has H264 and
-  common audio codecs but no HEVC decoder. `decode.c` decodes watched VP8
-  and H264 streams with it. `video.c` plays video files: libavformat
-  demuxes, libavcodec decodes H264 and the sound, libvpx VP8 and VP9, dav1d
-  AV1, and libyuv converts to RGBA. It also decodes the soundboard's MP3
+  common audio codecs but no HEVC decoder; on macOS it has no H264 or AAC
+  decoder either. `decode.c` decodes watched VP8 and H264 streams with it.
+  `video.c` plays video files: libavformat demuxes, libavcodec decodes H264
+  and the sound, libvpx VP8 and VP9, dav1d AV1, and libyuv converts to
+  RGBA. It also decodes the soundboard's MP3
   and Ogg sounds, which have no pictures. `vp8.c` and `clip.c` encode VP8 and VP9
   with libvpx, `picture.c` scales with libyuv, and `camera.cc` captures
   through libwebrtc's capture module.
 - `vendor/ffmpeg-src` holds only the GPU encoders, which `hwenc.c` drives,
   and the HEVC decoder for watched H265 streams, in `hevc.c`.
+- On macOS, VideoToolbox decodes H264 for `decode.c` and `video.c`, and
+  watched H265 streams, in `vtdec.c`, which gives `hevc.c`'s interface. It
+  decodes H264 only in 8 bits and 4:2:0, so 10-bit, 4:2:2 and 4:4:4 H264
+  files don't play there.
 - `vendor/x264-src` encodes H264 on the CPU, in `h264.c`, for Go Live and
   the camera.
 

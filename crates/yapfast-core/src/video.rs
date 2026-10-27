@@ -494,7 +494,8 @@ mod tests {
         // first file named with it, within the difference named. Made 4:2:2
         // or 4:4:4, its colours spread a little, so it's checked against the
         // H264 of its layout, which is checked loosely against the original.
-        for (name, like, within) in [
+        #[cfg(not(target_os = "macos"))]
+        let cases = [
             ("gif-av1-10bit.mp4", "gif-h264.mp4", 3.0),
             ("gif-av1-12bit.mp4", "gif-h264.mp4", 3.0),
             ("gif-vp9-10bit.webm", "gif-h264.mp4", 3.0),
@@ -505,7 +506,25 @@ mod tests {
             ("gif-av1-422-10bit.mp4", "gif-h264-422.mp4", 3.0),
             ("gif-vp9-444-10bit.webm", "gif-h264-444.mp4", 3.0),
             ("gif-av1-444.mp4", "gif-h264-444.mp4", 3.0),
-        ] {
+        ];
+        // VideoToolbox decodes H264 only in 8 bits and 4:2:0, so on macOS
+        // the others don't open, and VP9 stands in for them.
+        #[cfg(target_os = "macos")]
+        let cases = {
+            for name in ["gif-h264-10bit.mp4", "gif-h264-422.mp4", "gif-h264-444.mp4"] {
+                assert!(crate::chat::decode_picture(&fixture(name), 32, 32).is_none());
+            }
+            [
+                ("gif-av1-10bit.mp4", "gif-h264.mp4", 3.0),
+                ("gif-av1-12bit.mp4", "gif-h264.mp4", 3.0),
+                ("gif-vp9-10bit.webm", "gif-h264.mp4", 3.0),
+                ("gif-vp9-422.webm", "gif-h264.mp4", 8.0),
+                ("gif-vp9-444-10bit.webm", "gif-h264.mp4", 12.0),
+                ("gif-av1-422-10bit.mp4", "gif-vp9-422.webm", 3.0),
+                ("gif-av1-444.mp4", "gif-vp9-444-10bit.webm", 3.0),
+            ]
+        };
+        for (name, like, within) in cases {
             let (pictures, expected) = (frames(name), frames(like));
             assert_eq!(pictures.len(), expected.len(), "{name}");
             for (picture, expected) in pictures.iter().zip(&expected) {

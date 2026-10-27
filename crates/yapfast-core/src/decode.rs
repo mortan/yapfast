@@ -1,7 +1,7 @@
 //! Decoding a watched Go Live stream: VP8 with libvpx and H264 with FFmpeg,
 //! both inside libwebrtc, through native/decode.c; and H265 with the HEVC
 //! decoder of vendor/ffmpeg-src's FFmpeg, through native/hevc.c, where it's
-//! built.
+//! built. On macOS, VideoToolbox decodes H264 and H265 (native/vtdec.c).
 
 use std::ffi::{c_int, c_uchar, c_uint};
 
@@ -53,7 +53,8 @@ type DecodeFn = unsafe extern "C" fn(*mut Raw, *const c_uchar, usize, *mut RawPi
 type FreeFn = unsafe extern "C" fn(*mut Raw);
 
 /// The codecs a viewer tells Discord it decodes, most wanted first: H265
-/// only where FFmpeg's HEVC decoder is built in, on Linux and Windows.
+/// only where FFmpeg's HEVC decoder is built in, on Linux and Windows, or
+/// on macOS, where VideoToolbox decodes it.
 pub const DECODES: &[Codec] = if cfg!(hevcdec) {
     &[Codec::H265, Codec::H264, Codec::Vp8]
 } else {

@@ -167,8 +167,9 @@ echoed). With `YAPFAST_LOG=debug` it logs what it received every 5 s (`stream
 received`): packets out of order, resent, recovered, given up on, and keyframes
 asked for. The worker decodes with libvpx or with the FFmpeg H264 decoder in
 libwebrtc's archive (`native/decode.c`), or H265 with the HEVC decoder of
-`vendor/ffmpeg-src`'s FFmpeg (`native/hevc.c`), which libwebrtc's lacks, and
-writes RGBA at up to 1080p into the shared frames. That FFmpeg is built with
+`vendor/ffmpeg-src`'s FFmpeg (`native/hevc.c`), which libwebrtc's lacks; on
+macOS, whose libwebrtc FFmpeg has neither decoder, VideoToolbox decodes H264
+and H265 (`native/vtdec.c`). It writes RGBA at up to 1080p into the shared frames. That FFmpeg is built with
 its x86-64 assembly, without which H265 took over three times the processor
 time. Watching is possible only in the call you're in, so clicking someone
 sharing in another channel joins it first, once asked, and watches once the

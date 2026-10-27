@@ -14,6 +14,8 @@ fn main() {
         "camera.cc",
         "hwenc.c",
         "hevc.c",
+        "vtdec.c",
+        "vtdec.h",
     ] {
         println!("cargo:rerun-if-changed=native/{file}");
     }
@@ -80,6 +82,17 @@ fn main() {
         println!("cargo:rustc-cfg=hwenc");
         println!("cargo:rustc-cfg=hevcdec");
     }
+    // libwebrtc's macOS FFmpeg decodes neither H264 nor H265, so VideoToolbox
+    // does: decode.c's and video.c's H264, and vtdec.c's H265 in place of
+    // hevc.c's. webrtc-sys links the frameworks already; they're named for
+    // vtdec.c's own calls.
+    let videotoolbox = target_os == "macos";
+    if videotoolbox {
+        println!("cargo:rustc-cfg=hevcdec");
+        for framework in ["VideoToolbox", "CoreMedia", "CoreVideo", "CoreFoundation"] {
+            println!("cargo:rustc-link-lib=framework={framework}");
+        }
+    }
     let os = match target_os.as_str() {
         "windows" => "win",
         "macos" => "mac",
@@ -89,7 +102,11 @@ fn main() {
         Ok("aarch64") => "arm64",
         _ => "x64",
     };
-    cc::Build::new()
+    let mut codecs = cc::Build::new();
+    if videotoolbox {
+        codecs.file("native/vtdec.c");
+    }
+    codecs
         .file("native/vp8.c")
         .file("native/h264.c")
         .file("native/clip.c")

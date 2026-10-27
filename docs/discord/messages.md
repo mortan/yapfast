@@ -224,7 +224,7 @@ an error.
   and Giphy links arrive as MP4 "gifv" embeds, which play the same way, silent
   and looping, from the proxy's copy of the MP4 (`video.proxy_url`): up to a
   minute of it, decoded by the FFmpeg, libvpx and dav1d inside libwebrtc
-  (`native/video.c`). One that can't be decoded shows its still picture. It's
+  (`native/video.c`), and on macOS its H264 by VideoToolbox. One that can't be decoded shows its still picture. It's
   named and saved as its video, not its picture.
 - Attached videos show their poster, which the media proxy makes from the
   first frame (`proxy_url?format=webp`), with a play button; they play in
