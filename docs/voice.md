@@ -42,7 +42,8 @@ the driver's buffer without converting it, and libyuv converts each one (YUY2,
 MJPEG, NV12, RGB and the rest) into the same I420 buffer, frame after frame. It
 asks for 1280×720 at 30 frames a second, as Discord's client films without
 Nitro and as LiveKit's default camera does, and scales down a camera that can't
-film that small.
+film that small. On macOS, which that module doesn't cover, AVFoundation films
+instead, behind the same C interface (see below).
 
 A picture on screen, such as the preview, is a `picture::Feed`: whoever makes
 the frames converts each straight to RGBA at the size it shows, in one of at
@@ -127,12 +128,29 @@ only Media Foundation lists, such as some laptops' built-in MIPI cameras,
 aren't listed. [Windows beta](windows-beta.md#cameras-on-windows) has what
 was checked under Wine.
 
+On macOS, `crates/yapfast-core/native/camera_mac.m` exports the same three
+functions as `camera.cc` through AVFoundation. It lists built-in, external and
+Continuity Camera devices (`AVCaptureDeviceDiscoverySession`); a camera's id is
+its `uniqueID`, which stays the same across restarts, and its name is the one
+macOS shows. Opening one picks the device format closest to 1280×720 at 30
+frames a second as libwebrtc's module does (the smallest at least that large,
+else the largest), and an `AVCaptureSession` films it in NV12, dropping frames
+that come late. Each frame arrives on the camera's own serial dispatch queue,
+where libyuv converts it into the same reused I420 buffers and scales it down
+if it's larger, so there's no thread of Yapfast's own. Closing stops the
+session and then waits for the queue, so no picture arrives after it returns.
+Filming needs the Camera permission: the first open asks macOS, waiting for
+the answer off the main thread, and a refusal fails with where to allow it
+(System Settings › Privacy & Security › Camera). Run from a terminal, macOS
+asks on behalf of the terminal app.
+
 `YAPFAST_CAMERA_TEST_PATTERN=1` adds a "Test pattern" camera that films moving
 bars, for tests and machines without a camera. `cargo test -p yapfast-core
 films_a_real_camera -- --ignored` films the first real camera for a second,
 or the first whose name holds `YAPFAST_TEST_CAMERA`; a V4L2 loopback device fed
 by `ffmpeg -re -f lavfi -i testsrc2=size=1280x720:rate=30 -pix_fmt yuyv422 -f
-v4l2 /dev/videoN` works as one.
+v4l2 /dev/videoN` works as one. On macOS the terminal running it needs the
+Camera permission.
 
 ## Sounds
 

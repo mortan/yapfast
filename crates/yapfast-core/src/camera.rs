@@ -1,6 +1,8 @@
 //! Cameras: listing them, and capturing one for a call. Linux and Windows
 //! capture with libwebrtc's capture module (`native/camera.cc`), through V4L2
-//! and DirectShow, which converts each frame into the same two I420 buffers.
+//! and DirectShow, and macOS with AVFoundation (`native/camera_mac.m`), with
+//! the same C interface; each converts every frame into the same two I420
+//! buffers.
 //!
 //! `YAPFAST_CAMERA_TEST_PATTERN=1` adds a camera that films moving colour bars,
 //! for tests and screenshots on machines without a camera, and
@@ -60,13 +62,14 @@ pub fn list() -> Vec<Device> {
             name: "Test pattern".into(),
         });
     }
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     native::list(&mut devices);
     devices
 }
 
-/// libwebrtc's capture module, through `native/camera.cc`.
-#[cfg(any(target_os = "linux", windows))]
+/// libwebrtc's capture module, through `native/camera.cc`, or AVFoundation,
+/// through `native/camera_mac.m`.
+#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod native {
     use std::ffi::{CStr, CString, c_char, c_int, c_void};
 
@@ -98,6 +101,10 @@ mod native {
             user: *mut c_void,
         ) -> *mut RawCamera;
         fn yapfast_camera_close(camera: *mut RawCamera);
+        /// 1 when filming is allowed, 0 when it isn't, and -1 while it's
+        /// being asked on the main thread; off it, it asks and waits.
+        #[cfg(target_os = "macos")]
+        fn yapfast_camera_access() -> c_int;
     }
 
     extern "C" fn listed(user: *mut c_void, name: *const c_char, id: *const c_char) {
@@ -130,12 +137,14 @@ mod native {
     }
 
     // SAFETY: the camera is only opened and closed through this handle, from
-    // whichever thread holds it; pictures arrive on the module's own thread.
+    // whichever thread holds it; pictures arrive on the module's own thread,
+    // or on macOS the camera's dispatch queue.
     unsafe impl Send for Camera {}
 
     extern "C" fn deliver(user: *mut c_void, picture: *const RawPicture) {
         // SAFETY: `user` is the camera's boxed sink, alive until the camera
-        // closes, which waits for its thread; the planes last for this call.
+        // closes, which waits for its thread or queue; the planes last for
+        // this call.
         let sink = unsafe { &mut *user.cast::<Sink>() };
         if let Some(picture) = unsafe { picture.as_ref().and_then(|raw| I420::from_raw(raw)) } {
             sink(&picture);
@@ -145,6 +154,16 @@ mod native {
     impl Camera {
         pub(super) fn open(id: &str, sink: Sink) -> Result<Self> {
             let id = CString::new(id).context("not a camera id")?;
+            // SAFETY: no arguments; it may wait for the person's answer.
+            #[cfg(target_os = "macos")]
+            match unsafe { yapfast_camera_access() } {
+                1 => {}
+                0 => bail!(
+                    "macOS hasn't allowed Yapfast to use the camera. Allow it in System \
+                     Settings › Privacy & Security › Camera, then try again."
+                ),
+                _ => bail!("Allow Yapfast to use the camera when macOS asks, then try again."),
+            }
             let mut sink = Box::new(sink);
             let user = std::ptr::from_mut::<Sink>(sink.as_mut()).cast::<c_void>();
             // SAFETY: the id is terminated, and `user` stays boxed until the
@@ -178,7 +197,7 @@ mod native {
 /// A camera filming until dropped.
 #[derive(Default)]
 pub struct Camera {
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     _native: Option<native::Camera>,
     /// The thread that films, told to stop through the flag: the test
     /// pattern's, or on Windows the one holding the native camera.
@@ -230,7 +249,9 @@ impl Camera {
         Ok(camera)
     }
 
-    #[cfg(target_os = "linux")]
+    /// Linux's module films on a thread of its own, and macOS's session on
+    /// a dispatch queue of its own, so the camera needs no thread here.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn native(id: &str, sink: Sink) -> Result<Self> {
         Ok(Self {
             _native: Some(native::Camera::open(id, sink)?),
@@ -267,9 +288,9 @@ impl Camera {
         }
     }
 
-    #[cfg(not(any(target_os = "linux", windows)))]
+    #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
     fn native(_: &str, _: Sink) -> Result<Self> {
-        bail!("Cameras work on Linux and Windows for now.")
+        bail!("Cameras work on Linux, macOS and Windows for now.")
     }
 
     /// Runs `film` on the camera's thread until it returns; it's told to
@@ -281,7 +302,7 @@ impl Camera {
             .name("yapfast-camera".into())
             .spawn(move || film(&stopped))?;
         Ok(Self {
-            #[cfg(target_os = "linux")]
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
             _native: None,
             thread: Some((stop, thread)),
         })

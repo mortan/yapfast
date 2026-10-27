@@ -12,6 +12,7 @@ fn main() {
         "video.c",
         "picture.c",
         "camera.cc",
+        "camera_mac.m",
         "hwenc.c",
         "hevc.c",
         "vtdec.c",
@@ -55,6 +56,19 @@ fn main() {
         // VARIANT; webrtc-sys links the rest.
         if target_os == "windows" {
             println!("cargo:rustc-link-lib=dylib=oleaut32");
+        }
+    }
+    // macOS films through AVFoundation, with camera.cc's interface, and
+    // libyuv from the same archive.
+    if target_os == "macos" {
+        cc::Build::new()
+            .file("native/camera_mac.m")
+            .include(third_party.join("libyuv/include"))
+            .flag("-fobjc-arc")
+            .warnings(true)
+            .compile("yapfast_camera");
+        for framework in ["AVFoundation", "CoreMedia", "CoreVideo", "Foundation"] {
+            println!("cargo:rustc-link-lib=framework={framework}");
         }
     }
     println!("cargo::rustc-check-cfg=cfg(hwenc)");
