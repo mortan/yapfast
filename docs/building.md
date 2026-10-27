@@ -73,7 +73,8 @@ which upstream Slint doesn't offer. Dragging selects, a double press selects a
 word and a triple press a paragraph. Dragging past a text carries the selection
 on through the texts and pictures around it: those sharing its nearest flickable,
 such as a list's rows, in reading order. Pictures are the `Image`s with
-an `accessible-label`, and copy as `[Picture]`. Ctrl+C copies the selection
+an `accessible-label`, and copy as `[Picture]`. Ctrl+C (Cmd+C on macOS, which
+Slint's winit backend reports as Ctrl) copies the selection
 as read, without its Markdown: texts level with each other joined by a space, the
 rest by line breaks. Yapfast shows message authors and times as `StyledText` so the
 selection takes them in. The selection is kept as positions in the list's model,

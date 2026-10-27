@@ -80,8 +80,8 @@ errors make it taller than the minimum window. SSO and OAuth are still pending.
   splits out by Discord's rules (`TextBlocks` in `ui/messages.slint`); see
   [Discord](discord/README.md) for the details. Message text, authors and times are
   selectable across messages through Yapfast's patched Slint
-  ([building](building.md#dependencies)); Ctrl+C or the menu's Copy selection
-  copies it, and Copy text copies a whole message.
+  ([building](building.md#dependencies)); Ctrl+C (Cmd+C on macOS) or the
+  menu's Copy selection copies it, and Copy text copies a whole message.
 - Start a DM from the pen in the DM list's header: type a name to search the
   homeserver's user directory, or a full Matrix id. Yapfast opens the DM you
   already have with them, or starts an encrypted one and opens it once sync
@@ -147,9 +147,9 @@ errors make it taller than the minimum window. SSO and OAuth are still pending.
   redacts the message for everyone. Replies quote the original; edits are marked
   "(edited)". Reply and edit modes show above the composer, with Cancel.
   Cancelling an edit restores the draft it replaced.
-- Attach files with the system file dialog, paste them with Ctrl+V: files
-  copied in a file manager, or a picture copied from a browser or a screenshot
-  tool, or drop them on the window from a file manager. A drag over the
+- Attach files with the system file dialog, paste them with Ctrl+V (Cmd+V on
+  macOS): files copied in a file manager, or a picture copied from a browser
+  or a screenshot tool, or drop them on the window from a file manager. A drag over the
   window dims it under Discord's card, "Upload to #general" (`@Sam` in a DM,
   the name in quotes for a thread, the name alone for a group DM), with "You
   can add comments before uploading." Discord's second line, "Hold shift to
@@ -170,12 +170,13 @@ errors make it taller than the minimum window. SSO and OAuth are still pending.
   files. Each must fit the conversation's limit, and a file that doesn't is
   refused with its size and the limit. On Wayland the clipboard is read
   through the data-control protocol, so a picture keeps its copied bytes and a
-  GIF stays animated; elsewhere arboard reads it, and pixels are saved as PNG.
+  GIF stays animated; elsewhere, macOS included, arboard reads it, and pixels
+  are saved as PNG.
   Pasted pictures are saved as `image.png` in a temporary folder removed when
   Yapfast closes. Text on the clipboard pastes as text. A right click in the
   composer opens Discord's menu for the field, without its spelling
   suggestions: Cut and Copy while text is selected, Paste, which pastes as
-  Ctrl+V does, and Select All, which Discord's lacks. A thread's composer
+  Ctrl+V (Cmd+V) does, and Select All, which Discord's lacks. A thread's composer
   has the menu too, and pastes text only, as it holds no files. In Matrix the SDK encrypts
   and uploads each file through its send queue, up to 50 MB, then sends the
   text after them. Images show a decoded preview of up to
