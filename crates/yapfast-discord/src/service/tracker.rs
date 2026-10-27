@@ -2826,6 +2826,20 @@ mod tests {
     }
 
     #[test]
+    fn a_media_channel_lists_as_a_forum() {
+        let ready = json!({
+            "user": {"id": "1"},
+            "guilds": [{"id": "10", "properties": {"name": "Test", "owner_id": "1"},
+                "channels": [{"id": "16", "name": "mods", "type": 16, "position": 0}]}],
+            "merged_members": [[{"user_id": "1", "roles": []}]],
+        });
+        let tracker = Tracker::from_ready("1".into(), &ready, Default::default());
+        let channels = &tracker.servers[0].text_channels;
+        assert_eq!(channels.len(), 1);
+        assert!(channels[0].forum.is_some());
+    }
+
+    #[test]
     fn a_forum_posts_first_message_isnt_a_reply() {
         let ready = json!({
             "user": {"id": "1"},

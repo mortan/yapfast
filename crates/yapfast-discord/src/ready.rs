@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::{
     client,
-    forum::{self, Forum, GUILD_FORUM},
+    forum::{self, Forum, GUILD_FORUM, GUILD_MEDIA},
     notifications::{Level, Mute},
 };
 
@@ -696,8 +696,9 @@ impl Server {
             return;
         };
         match channel["type"].as_u64() {
-            // A forum lists among the text channels, as in Discord's client.
-            Some(GUILD_TEXT | GUILD_ANNOUNCEMENT | GUILD_FORUM) => {
+            // A forum or media channel lists among the text channels, as in
+            // Discord's client.
+            Some(GUILD_TEXT | GUILD_ANNOUNCEMENT | GUILD_FORUM | GUILD_MEDIA) => {
                 if let Some(channel) = parse_channel(channel) {
                     self.text_channels.push(channel);
                 }

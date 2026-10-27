@@ -489,7 +489,9 @@ ordinary message in it.
 
 A forum (type 15) lists among the text channels, by its position, with its
 own icon, and shows its posts in place of messages, as Discord's client
-does (`application/forum.rs`, `ForumPanel`). Its posts are public threads
+does (`application/forum.rs`, `ForumPanel`). A media channel (type 16) has
+a forum's fields and is one here, with a forum's icon and its list of
+cards, where Discord's client shows a gallery. Its posts are public threads
 whose parent is the forum, so everything above holds for them: posts the
 account is in list under the forum in the sidebar, the active ones come
 with THREAD_LIST_SYNC once the server is subscribed (with `threads`, but
