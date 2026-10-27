@@ -68,7 +68,8 @@ all of that, and saves nothing ([measurements](measurements/README.md)).
 What only the window used stops with it: the microphone meters and the camera
 test that Voice settings run, the image viewer's picture and an open file
 dialog. Half a second later Yapfast gives freed memory back: `malloc_trim` on
-Linux; on Windows `HeapCompact` on the process heap, which Rust allocates
+Linux; `malloc_zone_pressure_relief` on macOS, which hands back the free
+pages its allocator keeps; on Windows `HeapCompact` on the process heap, which Rust allocates
 from, and `SetProcessWorkingSetSize(-1, -1)`, which empties the working set.
 Task Manager's Memory column is the private working set, which the window's
 pages would otherwise stay in; they come back from the standby list if

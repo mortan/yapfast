@@ -240,8 +240,10 @@ async fn connected_session(
     session.run(requests).await
 }
 
-/// glibc otherwise holds freed READY allocations for the entire session.
-/// Trim once after parsing, before the session starts handling requests.
+/// glibc, and macOS's allocator, otherwise hold freed READY allocations for
+/// the entire session. Trim once after parsing, before the session starts
+/// handling requests. As `yapfast_core::release_free_heap`, which this crate
+/// is below.
 fn trim_startup_heap() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     {
@@ -250,6 +252,15 @@ fn trim_startup_heap() {
         }
         // SAFETY: malloc_trim only returns unused allocator pages to the OS.
         unsafe { malloc_trim(0) };
+    }
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+        }
+        // SAFETY: with no zone it relieves every zone, and with a goal of 0
+        // returns all the free pages it can; it frees nothing in use.
+        unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) };
     }
 }
 

@@ -833,16 +833,9 @@ fn control(path: PathBuf, shell: Rc<shell::Shell>) -> slint::Timer {
 }
 
 /// Return freed heap pages to the system, to separate memory still in use from
-/// memory glibc keeps for reuse.
+/// memory the allocator keeps for reuse.
 fn trim() {
-    #[cfg(all(target_os = "linux", target_env = "gnu"))]
-    {
-        unsafe extern "C" {
-            fn malloc_trim(pad: usize) -> std::ffi::c_int;
-        }
-        // SAFETY: malloc_trim only releases free memory held by the allocator.
-        unsafe { malloc_trim(0) };
-    }
+    yapfast_core::release_free_heap();
 }
 
 /// Print the allocator's per-arena totals to standard error: memory held from

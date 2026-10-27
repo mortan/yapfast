@@ -86,6 +86,31 @@ pub mod voice;
 pub mod voice_demo;
 pub mod volume;
 
+/// Returns the heap the allocator holds free to the system. glibc keeps freed
+/// memory for reuse until trimmed; macOS's allocator keeps freed pages in
+/// its magazines until asked for them, as under memory pressure. Elsewhere
+/// it does nothing. `yapfast-discord`'s session, below this crate, has its
+/// own copy.
+pub fn release_free_heap() {
+    #[cfg(all(target_os = "linux", target_env = "gnu"))]
+    {
+        unsafe extern "C" {
+            fn malloc_trim(pad: usize) -> std::ffi::c_int;
+        }
+        // SAFETY: malloc_trim only returns unused allocator pages to the OS.
+        unsafe { malloc_trim(0) };
+    }
+    #[cfg(target_os = "macos")]
+    {
+        unsafe extern "C" {
+            fn malloc_zone_pressure_relief(zone: *mut std::ffi::c_void, goal: usize) -> usize;
+        }
+        // SAFETY: with no zone it relieves every zone, and with a goal of 0
+        // returns all the free pages it can; it frees nothing in use.
+        unsafe { malloc_zone_pressure_relief(std::ptr::null_mut(), 0) };
+    }
+}
+
 /// Install the TLS provider before starting Matrix or calling services.
 pub fn init_tls() -> anyhow::Result<()> {
     rustls::crypto::aws_lc_rs::default_provider()
