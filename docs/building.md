@@ -272,7 +272,8 @@ files named here are in `crates/yapfast-core/native/`.
 - On macOS, VideoToolbox decodes H264 for `decode.c` and `video.c`, and
   watched H265 streams, in `vtdec.c`, which gives `hevc.c`'s interface. It
   decodes H264 only in 8 bits and 4:2:0, so 10-bit, 4:2:2 and 4:4:4 H264
-  files don't play there.
+  files don't play there. AudioToolbox decodes video files' AAC sound, LC
+  and HE-AAC v1 and v2, for `video.c`, in `aacdec.c`.
 - `vendor/x264-src` encodes H264 on the CPU, in `h264.c`, for Go Live and
   the camera.
 

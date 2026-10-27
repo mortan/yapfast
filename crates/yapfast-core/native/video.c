@@ -2,7 +2,8 @@
  * libavcodec (H264), or on macOS, whose libavcodec has no H264 decoder, by
  * VideoToolbox (vtdec.c), libvpx (VP8, VP9) or dav1d (AV1), and scaled and
  * converted to RGBA by libyuv; sound decoded by libavcodec (AAC, Opus, MP3,
- * Vorbis, FLAC, PCM). All of it is inside Yapfast's libwebrtc archive. The
+ * Vorbis, FLAC, PCM), or on macOS, whose libavcodec has no AAC decoder, its
+ * AAC by AudioToolbox (aacdec.c). All of it is inside Yapfast's libwebrtc archive. The
  * caller supplies the file through two functions, so it can arrive while it
  * plays. Pictures show in 4:2:0, 4:2:2 or 4:4:4 at 8 or 10 bits, or in
  * 4:2:0 at 12, as far as libyuv goes. */
@@ -20,6 +21,7 @@
 #include "vpx/vp8dx.h"
 #include "vpx/vpx_decoder.h"
 #ifdef __APPLE__
+#include "aacdec.h"
 #include "vtdec.h"
 #endif
 
@@ -104,6 +106,18 @@ struct yapfast_video {
   int sample_rate;
   int channels;
   AVFrame *sound_frame;
+#ifdef __APPLE__
+  struct aacdec *aac;
+  /* The most frames an AAC packet decodes to. */
+  int aac_frames;
+  /* Frames decoded into `samples` and not yet given, and when the first
+   * plays, in the stream's time base. */
+  int aac_pending;
+  int64_t aac_pts;
+  /* Frames still to leave out at the start, as the file's edit list says:
+   * the encoder's priming. */
+  int64_t aac_skip;
+#endif
   /* The sound yapfast_video_next gave last, as interleaved floats. */
   float *samples;
   size_t samples_size;
@@ -161,6 +175,7 @@ void yapfast_video_free(struct yapfast_video *video) {
   }
 #ifdef __APPLE__
   vtdec_free(video->vt);
+  aacdec_free(video->aac);
 #endif
   avcodec_free_context(&video->sound_context);
   av_frame_free(&video->sound_frame);
@@ -222,12 +237,28 @@ static int open_decoder(struct yapfast_video *video, const AVCodecParameters *pa
   }
 }
 
+/* Whether the video has sound Yapfast decodes. */
+static int has_sound(const struct yapfast_video *video) {
+#ifdef __APPLE__
+  if (video->aac) return 1;
+#endif
+  return video->sound_context != NULL;
+}
+
 /* Opens the sound, when the file has some Yapfast can decode; without it, the
  * video plays silently. */
 static void open_sound(struct yapfast_video *video) {
   int stream = av_find_best_stream(video->format, AVMEDIA_TYPE_AUDIO, -1, video->stream, NULL, 0);
   if (stream < 0) return;
   const AVCodecParameters *parameters = video->format->streams[stream]->codecpar;
+#ifdef __APPLE__
+  if (parameters->codec_id == AV_CODEC_ID_AAC) {
+    video->aac = aacdec_new(parameters->extradata, (size_t)FFMAX(parameters->extradata_size, 0),
+                            &video->sample_rate, &video->channels, &video->aac_frames);
+    if (video->aac) video->sound_stream = stream;
+    return;
+  }
+#endif
   const AVCodec *codec = avcodec_find_decoder(parameters->codec_id);
   AVCodecContext *context = codec ? avcodec_alloc_context3(codec) : NULL;
   AVFrame *frame = av_frame_alloc();
@@ -502,8 +533,62 @@ static float sample(const AVFrame *frame, int planar, int channels, int channel,
   }
 }
 
+#ifdef __APPLE__
+/* Decodes an AAC packet after the samples not yet given, leaving out what
+ * the file says to: the priming at the start, the padding at the end. */
+static int decode_aac(struct yapfast_video *video, const AVPacket *packet) {
+  int channels = video->channels;
+  size_t needed =
+      (size_t)(video->aac_pending + video->aac_frames) * (size_t)channels * sizeof(float);
+  if (video->samples_size < needed) {
+    float *grown = realloc(video->samples, needed);
+    if (!grown) return FAILED;
+    video->samples = grown;
+    video->samples_size = needed;
+  }
+  float *samples = video->samples + (size_t)video->aac_pending * (size_t)channels;
+  int frames = aacdec_decode(video->aac, packet->data, (size_t)packet->size, samples);
+  /* Damaged sound is left out. */
+  if (frames <= 0) return 0;
+  size_t side_size = 0;
+  const uint8_t *side = av_packet_get_side_data(packet, AV_PKT_DATA_SKIP_SAMPLES, &side_size);
+  int64_t padding = 0;
+  if (side && side_size >= 8) {
+    uint32_t start = side[0] | side[1] << 8 | side[2] << 16 | (uint32_t)side[3] << 24;
+    padding = side[4] | side[5] << 8 | side[6] << 16 | (uint32_t)side[7] << 24;
+    video->aac_skip = start;
+  }
+  int skipped = (int)FFMIN(video->aac_skip, frames);
+  video->aac_skip -= skipped;
+  int kept = frames - skipped - (int)FFMIN(padding, frames - skipped);
+  if (kept <= 0) return 0;
+  if (skipped > 0) {
+    memmove(samples, samples + (size_t)skipped * (size_t)channels,
+            (size_t)kept * (size_t)channels * sizeof(float));
+  }
+  if (video->aac_pending == 0) {
+    video->aac_pts = packet->pts;
+    if (packet->pts != AV_NOPTS_VALUE) {
+      video->aac_pts += av_rescale_q(skipped, (AVRational){1, video->sample_rate},
+                                     video->format->streams[video->sound_stream]->time_base);
+    }
+  }
+  video->aac_pending += kept;
+  return 0;
+}
+#endif
+
 /* Takes the sound decoder's next samples: 1 with some, 0 when it wants data. */
 static int receive_sound(struct yapfast_video *video, int64_t *time_ms) {
+#ifdef __APPLE__
+  if (video->aac) {
+    if (video->aac_pending == 0) return 0;
+    video->sample_frames = video->aac_pending;
+    video->aac_pending = 0;
+    *time_ms = milliseconds(video, video->sound_stream, video->aac_pts);
+    return 1;
+  }
+#endif
   if (!video->sound_context) return 0;
   AVFrame *frame = video->sound_frame;
   av_frame_unref(frame);
@@ -547,6 +632,13 @@ static int demux(struct yapfast_video *video, AVPacket *packet) {
     }
     if (packet->stream_index == video->stream) return 1;
     if (packet->stream_index == video->sound_stream) {
+#ifdef __APPLE__
+      if (video->aac) {
+        int decoded = decode_aac(video, packet);
+        av_packet_unref(packet);
+        return decoded;
+      }
+#endif
       /* Damaged sound is left out. */
       avcodec_send_packet(video->sound_context, packet);
       av_packet_unref(packet);
@@ -620,7 +712,7 @@ static int feed(struct yapfast_video *video) {
 /* Reads on towards the sound, holding back the pictures' packets: 0 after a
  * packet, HELD when no more can be held or the sound ended, or FAILED. */
 static int feed_sound(struct yapfast_video *video) {
-  if (!video->sound_context || video->read_all || video->held_count == HELD_PACKETS ||
+  if (!has_sound(video) || video->read_all || video->held_count == HELD_PACKETS ||
       video->held_bytes >= HELD_BYTES) {
     return HELD;
   }
@@ -762,6 +854,9 @@ int yapfast_video_seek(struct yapfast_video *video, int64_t time_ms) {
   video->vpx_iter = NULL;
 #ifdef __APPLE__
   if (video->vt) vtdec_flush(video->vt);
+  if (video->aac) aacdec_flush(video->aac);
+  video->aac_pending = 0;
+  video->aac_skip = 0;
 #endif
   if (video->dav1d) {
     dav1d_data_unref(&video->dav1d_pending);
