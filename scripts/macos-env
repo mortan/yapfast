@@ -1,0 +1,139 @@
+#!/usr/bin/env bash
+# The build environment on macOS (Apple silicon), in place of `nix develop
+# path:./nix`, which is defined for x86_64-linux only: rustup's cargo first
+# (rust-toolchain.toml pins Rust), protoc, and LiveKit's libwebrtc and
+# rust-skia's prebuilt Skia, each downloaded once and checked by SHA-256 into
+# ~/Library/Caches/yapfast-build, Skia with its JPEG table renamed by
+# nix/prepare-skia-native.py, as on Linux.
+# Usage: scripts/macos-env COMMAND [ARGUMENT…]   runs COMMAND in it
+#        scripts/macos-env                       starts $SHELL in it
+#        source scripts/macos-env                sets it up in this shell (bash or zsh)
+# Runs in macOS's bash 3.2 and in zsh, so it uses no arrays.
+
+# Sets everything up and exports it; returns non-zero, having said why, when
+# something is missing.
+_yapfast_macos_env() {
+  local root=$1
+  local cache="$HOME/Library/Caches/yapfast-build"
+  local llvm=/opt/homebrew/opt/llvm@21/bin
+  local rustup_bin=/opt/homebrew/opt/rustup/bin
+
+  if [ "$(uname -sm)" != "Darwin arm64" ]; then
+    echo "scripts/macos-env: this is for macOS on Apple silicon; elsewhere use nix develop path:./nix" >&2
+    return 1
+  fi
+  if ! xcrun --show-sdk-path >/dev/null 2>&1; then
+    echo "scripts/macos-env: no macOS SDK; install Xcode or run: xcode-select --install" >&2
+    return 1
+  fi
+  local missing=""
+  [ -x "$rustup_bin/rustup" ] || missing="$missing rustup"
+  command -v protoc >/dev/null 2>&1 || missing="$missing protobuf"
+  command -v python3 >/dev/null 2>&1 || missing="$missing python"
+  command -v curl >/dev/null 2>&1 || missing="$missing curl"
+  command -v unzip >/dev/null 2>&1 || missing="$missing unzip"
+  { [ -x "$llvm/llvm-objcopy" ] && [ -x "$llvm/llvm-nm" ]; } || missing="$missing llvm@21"
+  if [ -n "$missing" ]; then
+    echo "scripts/macos-env: missing tools; run: brew install$missing" >&2
+    return 1
+  fi
+
+  # Homebrew's own `rust` would otherwise shadow rustup's proxies, and ignore
+  # rust-toolchain.toml.
+  case ":$PATH:" in
+    "$rustup_bin:"*) ;;
+    *) export PATH="$rustup_bin:$PATH" ;;
+  esac
+
+  # LiveKit's libwebrtc, the tag webrtc-sys-build pins, as nix/native.nix
+  # gives it for Linux: the unpacked release folder. It's moved into place
+  # whole, so its presence means it's complete.
+  local webrtc="$cache/webrtc-51ef663"
+  if [ ! -d "$webrtc/mac-arm64-release" ]; then
+    mkdir -p "$webrtc" || return 1
+    _yapfast_fetch \
+      https://github.com/livekit/rust-sdks/releases/download/webrtc-51ef663/webrtc-mac-arm64-release.zip \
+      "$webrtc/webrtc-mac-arm64-release.zip" \
+      f9be49b9fee9cd1588da8a40c85bda21f5ea49c4ed82662dc889b1c919569a08 || return 1
+    local unpacked
+    unpacked=$(mktemp -d "$webrtc/unpack.XXXXXX") || return 1
+    if ! unzip -q "$webrtc/webrtc-mac-arm64-release.zip" -d "$unpacked" ||
+      ! mv "$unpacked/mac-arm64-release" "$webrtc/mac-arm64-release"; then
+      rm -rf "$unpacked"
+      echo "scripts/macos-env: could not unpack $webrtc/webrtc-mac-arm64-release.zip" >&2
+      return 1
+    fi
+    rm -rf "$unpacked" "$webrtc/webrtc-mac-arm64-release.zip"
+  fi
+  export LK_CUSTOM_WEBRTC="$webrtc/mac-arm64-release"
+
+  # rust-skia's prebuilt Skia for the features Yapfast uses on macOS, with its
+  # JPEG table renamed so that it doesn't clash with libwebrtc's. The prepare
+  # script checks the archive's hash itself, and reuses its output while its
+  # stamp matches.
+  local skia_package=skia-binaries-b7f043e0b1e2a850e702-aarch64-apple-darwin-ganesh-gl-jpegd-jpege-metal-pdf.tar.gz
+  if [ ! -f "$cache/$skia_package" ]; then
+    mkdir -p "$cache" || return 1
+    _yapfast_fetch \
+      "https://github.com/rust-skia/skia-binaries/releases/download/0.153.3/$skia_package" \
+      "$cache/$skia_package" \
+      688dc8a8f81f918cfaaae5f5af44262e75fc5d1a69589735926add090730d16a || return 1
+  fi
+  local skia
+  skia=$(YAPFAST_SKIA_TARGET=macos YAPFAST_SKIA_SOURCE="$cache/$skia_package" \
+    YAPFAST_SKIA_OUTPUT="$cache/skia-0.153.3" \
+    YAPFAST_SKIA_OBJCOPY="$llvm/llvm-objcopy" YAPFAST_SKIA_NM="$llvm/llvm-nm" \
+    python3 -I "$root/nix/prepare-skia-native.py") || {
+    echo "scripts/macos-env: preparing Skia failed" >&2
+    return 1
+  }
+  export SKIA_BINARIES_URL="file://$skia"
+
+  export PROTOC
+  PROTOC=$(command -v protoc)
+  # ScreenCaptureKit, UNUserNotificationCenter and SMAppService.
+  export MACOSX_DEPLOYMENT_TARGET=14.0
+  # What scripts test in place of IN_NIX_SHELL.
+  export YAPFAST_MACOS_ENV=1
+}
+
+# Downloads URL to FILE and checks it against SHA256;
+# FILE appears only once it matches.
+_yapfast_fetch() {
+  local url=$1 file=$2 sha256=$3
+  echo "scripts/macos-env: downloading $url" >&2
+  if ! curl -fL --progress-bar -o "$file.partial" "$url"; then
+    rm -f "$file.partial"
+    echo "scripts/macos-env: could not download $url" >&2
+    return 1
+  fi
+  if [ "$(shasum -a 256 "$file.partial" | cut -d' ' -f1)" != "$sha256" ]; then
+    rm -f "$file.partial"
+    echo "scripts/macos-env: $url doesn't match its pinned SHA-256" >&2
+    return 1
+  fi
+  mv "$file.partial" "$file"
+}
+
+if [ -n "${ZSH_VERSION:-}" ]; then
+  eval '_yapfast_script=${(%):-%x}'
+  case "$ZSH_EVAL_CONTEXT" in *:file*) _yapfast_sourced=1 ;; *) _yapfast_sourced= ;; esac
+else
+  _yapfast_script=${BASH_SOURCE[0]}
+  if [ "$_yapfast_script" != "$0" ]; then _yapfast_sourced=1; else _yapfast_sourced=; fi
+fi
+_yapfast_root=$(cd "$(dirname "$_yapfast_script")/.." && pwd -P)
+
+if [ -n "$_yapfast_sourced" ]; then
+  _yapfast_macos_env "$_yapfast_root"
+  _yapfast_status=$?
+  unset -f _yapfast_macos_env _yapfast_fetch
+  unset _yapfast_script _yapfast_sourced _yapfast_root
+  return $_yapfast_status
+fi
+
+_yapfast_macos_env "$_yapfast_root" || exit 1
+if [ $# -eq 0 ]; then
+  exec "${SHELL:-/bin/zsh}"
+fi
+exec "$@"

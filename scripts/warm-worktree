@@ -4,13 +4,15 @@
 # Usage: scripts/warm-worktree, inside the worktree, before its first build.
 # It copies target/fast and target/check-combinations with reflinks, which
 # take no space until the copies diverge, and skips one the worktree already
-# has. It needs a filesystem with reflinks, such as btrfs. The copies keep
-# their timestamps: Cargo rebuilds a crate whose dependencies look newer.
+# has. It needs a filesystem with reflinks, such as btrfs, or APFS clones.
+# The copies keep their timestamps: Cargo rebuilds a crate whose
+# dependencies look newer.
 # It also copies the private material .gitignore keeps out of the repository.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-if [[ -z "${IN_NIX_SHELL:-}" ]]; then
+if [[ -z "${IN_NIX_SHELL:-}${YAPFAST_MACOS_ENV:-}" ]]; then
+  [[ $(uname) == Darwin ]] && exec scripts/macos-env "$0" "$@"
   exec nix develop path:./nix --command "$0" "$@"
 fi
 
@@ -24,8 +26,18 @@ fi
 # Cargo would reuse their copied builds, and a build script that names its
 # inputs by absolute path, as Slint's does, would go on watching the main
 # checkout's files. Cleaning them makes them build from this worktree's.
-mapfile -t local_crates < <(cargo metadata --locked --format-version 1 |
+# A loop rather than mapfile, which macOS's bash 3.2 lacks.
+local_crates=()
+while IFS= read -r line; do
+  local_crates+=("$line")
+done < <(cargo metadata --locked --format-version 1 |
   jq -r '.packages[] | select(.source == null) | "-p\n\(.name)"')
+
+# Reflinks, as macOS's cp makes them: APFS clones.
+reflink=(--reflink=always) reflink_auto=(--reflink=auto)
+if [[ $(uname) == Darwin ]]; then
+  reflink=(-c) reflink_auto=(-c)
+fi
 
 mkdir -p target
 # Cargo cleans only a target directory that has this tag, which the main
@@ -45,7 +57,7 @@ for dir in fast check-combinations; do
     echo "$dir: already here"
     continue
   fi
-  if ! cp -a --reflink=always "$main/target/$dir" "target/$dir.partial"; then
+  if ! cp -a "${reflink[@]}" "$main/target/$dir" "target/$dir.partial"; then
     rm -rf "target/$dir.partial"
     echo "scripts/warm-worktree: could not reflink $main/target/$dir" >&2
     exit 1
@@ -67,7 +79,7 @@ sed -n '/^# Private working material/,/^$/p' .gitignore | grep '^/' | while read
     path=${source#"$main"/}
     [[ -e "$source" && ! -e "$path" ]] || continue
     mkdir -p "$(dirname "$path")"
-    cp -a --reflink=auto "$source" "$path"
+    cp -a "${reflink_auto[@]}" "$source" "$path"
   done
 done
 echo "private material: copied from $main"

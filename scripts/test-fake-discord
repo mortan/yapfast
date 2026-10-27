@@ -17,7 +17,8 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-if [[ -z "${IN_NIX_SHELL:-}" ]]; then
+if [[ -z "${IN_NIX_SHELL:-}${YAPFAST_MACOS_ENV:-}" ]]; then
+  [[ $(uname) == Darwin ]] && exec scripts/macos-env "$0" "$@"
   exec nix develop path:./nix --command "$0" "$@"
 fi
 
@@ -25,7 +26,7 @@ mkdir -p target
 fakes=()
 # Stops every fake: a stopped one's status fails `wait`, which mustn't end
 # the trap before the next.
-trap 'for fake in "${fakes[@]}"; do kill "$fake" 2>/dev/null || true; wait "$fake" 2>/dev/null || true; done' EXIT
+trap 'for fake in ${fakes[@]+"${fakes[@]}"}; do kill "$fake" 2>/dev/null || true; wait "$fake" 2>/dev/null || true; done' EXIT
 
 # Starts the fake on a free port, logging to the file given first, with the
 # other arguments, and waits until it answers; sets $server to its address.

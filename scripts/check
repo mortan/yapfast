@@ -9,10 +9,13 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-if [[ -z "${IN_NIX_SHELL:-}" ]]; then
+if [[ -z "${IN_NIX_SHELL:-}${YAPFAST_MACOS_ENV:-}" ]]; then
+  [[ $(uname) == Darwin ]] && exec scripts/macos-env "$0" "$@"
   exec nix develop path:./nix --command "$0" "$@"
 fi
 
+# Expanded as ${profile[@]+"${profile[@]}"}: macOS's bash 3.2 calls an empty
+# array unbound under `set -u`.
 profile=()
 profile_dir=debug
 case "${1:-}" in
@@ -45,7 +48,7 @@ run() {
   printf '%s\n' "$report"
 }
 
-clippy=(cargo clippy --locked "${profile[@]}" --all-targets)
+clippy=(cargo clippy --locked ${profile[@]+"${profile[@]}"} --all-targets)
 
 run fmt cargo fmt --all -- --check
 run doc-links scripts/check-doc-links
@@ -54,8 +57,8 @@ run doc-links scripts/check-doc-links
 # alongside the first. It still builds, as a dependency, and holds no code to
 # lint.
 run clippy "${clippy[@]}" --workspace --exclude yapfast-ui -- -D warnings
-run test cargo test --locked "${profile[@]}" --workspace
-run build cargo build --locked "${profile[@]}" --workspace
+run test cargo test --locked ${profile[@]+"${profile[@]}"} --workspace
+run build cargo build --locked ${profile[@]+"${profile[@]}"} --workspace
 # The binary the build step made: `cargo run` would resolve the dependencies'
 # features for yapfast alone, not the workspace, and compile it again.
 if [[ "$(cat "$logs/build.rc")" == 0 ]]; then
@@ -79,7 +82,7 @@ run clippy-matrix-only "${clippy[@]}" -p yapfast -p yapfast-core -p feature-unio
 # out of target/<profile>/.
 export CARGO_TARGET_DIR=target/check-combinations
 run clippy-headless "${clippy[@]}" -p yapfast --no-default-features --features matrix,discord -- -D warnings
-run smoke-headless cargo run --locked "${profile[@]}" --no-default-features --features matrix,discord -- --smoke-test
+run smoke-headless cargo run --locked ${profile[@]+"${profile[@]}"} --no-default-features --features matrix,discord -- --smoke-test
 
 failed=()
 for name in fmt doc-links clippy test build smoke clippy-discord-only clippy-matrix-only \

@@ -13,6 +13,20 @@ Three Nix shells cover the work:
 - `nix develop path:./nix#windows` cross-builds for Windows; see the
   [Windows beta guide](windows-beta.md).
 
+On macOS (Apple silicon), `scripts/macos-env` takes the development shell's
+place: run commands as `scripts/macos-env cargo ...`, or `source` it into bash
+or zsh. It needs Xcode's SDK and `brew install rustup protobuf llvm@21`, and
+names whatever is missing. It puts rustup's `cargo` ahead of Homebrew's, so
+`rust-toolchain.toml` picks Rust, and sets `PROTOC`,
+`MACOSX_DEPLOYMENT_TARGET=14.0` and `YAPFAST_MACOS_ENV=1`. The first run
+downloads LiveKit's libwebrtc and rust-skia's Skia for `aarch64-apple-darwin`
+into `~/Library/Caches/yapfast-build`, checks each against its pinned SHA-256,
+and renames Skia's JPEG table with `nix/prepare-skia-native.py`, as the Nix
+shell does on Linux; later runs reuse them without the network.
+`scripts/check`, `scripts/test-fake-discord` and `scripts/warm-worktree`
+start through it on macOS, as they start through `nix develop` on Linux;
+`warm-worktree` makes APFS clones there.
+
 The repository's own `flake.nix` builds no shell, only the package that
 `nix profile add github:yapfast/yapfast#yapfast` installs: the Discord-only
 release build, from `nix/package.nix`. It shares libwebrtc, Skia and the

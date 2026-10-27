@@ -18,14 +18,18 @@ pins = {
               'ef41a8ff85bebeb06238df88e144eb04778a368fc1672a63155155d97f0caf10'),
     'windows': ('x86_64-pc-windows-msvc-d3d-ganesh-gl-jpegd-jpege-pdf-static',
                 os.environ.get('YAPFAST_SKIA_STATIC_SHA256')),
+    'macos': ('aarch64-apple-darwin-ganesh-gl-jpegd-jpege-metal-pdf',
+              '688dc8a8f81f918cfaaae5f5af44262e75fc5d1a69589735926add090730d16a'),
 }
 suffix, source_sha256 = pins[native_target]
 if not source_sha256:
     raise SystemExit('Windows preparation requires the verified source-build archive')
 key = 'b7f043e0b1e2a850e702-' + suffix
 package = 'skia-binaries-' + key + '.tar.gz'
-old_symbol = 'jpeg_natural_order'
-new_symbol = 'yapfast_skia_jpeg_natural_order'
+# Mach-O prefixes C symbols with an underscore; Skia's table is S (a data section), not R.
+prefix, definition = ('_', ' S ') if native_target == 'macos' else ('', ' R ')
+old_symbol = prefix + 'jpeg_natural_order'
+new_symbol = prefix + 'yapfast_skia_jpeg_natural_order'
 target = Path(os.environ['YAPFAST_SKIA_OUTPUT'])
 archive_path = target / package
 upstream_path = target / 'upstream' / package
@@ -109,6 +113,48 @@ def coff_payloads(data):
                                 hashlib.sha256(lines).hexdigest())
     return result
 
+def macho_payloads(data):
+    """Mach-O sections, relocations by symbol name: objcopy may reorder the symbol table."""
+    magic, cpu, subtype, kind, count, _, flags, _ = struct.unpack_from('<IiiIIIII', data)
+    if magic != 0xfeedfacf:
+        raise SystemExit('Expected little-endian Mach-O 64 archive member')
+    commands, position = [], 32
+    for _ in range(count):
+        command, size = struct.unpack_from('<II', data, position)
+        commands.append((command, data[position:position + size]))
+        position += size
+    names = []
+    for command, raw in commands:
+        if command == 0x2:  # LC_SYMTAB
+            offset, total, strings, _ = struct.unpack_from('<IIII', raw, 8)
+            for index in range(total):
+                name = data[strings + struct.unpack_from('<I', data, offset + index * 16)[0]:].split(b'\0', 1)[0].decode()
+                names.append(old_symbol if name == new_symbol else name)
+    result = {'header': (cpu, subtype, kind, flags)}
+    for index, (command, raw) in enumerate(commands):
+        if command == 0x19:  # LC_SEGMENT_64; file offsets may move
+            segment = struct.unpack_from('<16sQQQQiiII', raw, 8)
+            result[f'{index}:segment'] = segment[:3] + segment[4:]
+            for number in range(segment[7]):
+                section = struct.unpack_from('<16s16sQQIIIIIIII', raw, 72 + number * 80)
+                # Zero-fill sections have no file bytes.
+                payload = b'' if section[8] & 0xff in (0x1, 0xc, 0x12) else data[section[4]:section[4] + section[3]]
+                relocations = []
+                for entry in range(section[7]):
+                    address, info = struct.unpack_from('<iI', data, section[6] + entry * 8)
+                    # External relocations name a symbol; the rest a section or addend.
+                    target = names[info & 0xffffff] if info & 0x8000000 else info & 0xffffff
+                    relocations.append((address, info >> 24, target))
+                name = (section[1].rstrip(b'\0') + b',' + section[0].rstrip(b'\0')).decode()
+                result[f'{index}:{number}:{name}'] = (section[2:4], section[5], section[7:],
+                                                      hashlib.sha256(payload).hexdigest(), relocations)
+        elif command in (0x26, 0x29, 0x2e):  # function starts, data in code, optimization hints
+            offset, size = struct.unpack_from('<II', raw, 8)
+            result[f'{index}:linkedit'] = (command, hashlib.sha256(data[offset:offset + size]).hexdigest())
+        elif command not in (0x2, 0xb):  # LC_SYMTAB and LC_DYSYMTAB may change
+            result[f'{index}:command'] = hashlib.sha256(raw).hexdigest()
+    return result
+
 def archive_members(path):
     data = path.read_bytes()
     if data[:8] != b'!<arch>\n':
@@ -121,6 +167,11 @@ def archive_members(path):
         size = int(header[48:58])
         name = header[:16].decode().strip()
         payload = data[position + 60:position + 60 + size]
+        if name.startswith('#1/'):  # BSD ar: the name leads the payload
+            length = int(name[3:])
+            name, payload = payload[:length].rstrip(b'\0').decode(), payload[length:]
+            if name.startswith('__.SYMDEF'):
+                name = '/'
         if name == '//':
             names = payload
         elif name not in ('/', '/SYM64/'):
@@ -130,7 +181,7 @@ def archive_members(path):
                 name = name.rstrip('/')
             if name in members:
                 raise SystemExit('Duplicate archive member: ' + name)
-            members[name] = elf_payloads(payload) if native_target == 'linux' else coff_payloads(payload)
+            members[name] = {'linux': elf_payloads, 'windows': coff_payloads, 'macos': macho_payloads}[native_target](payload)
         position += 60 + size + size % 2
     return members
 
@@ -147,7 +198,7 @@ with tempfile.TemporaryDirectory(prefix='skia-native-prepare-', dir=target.paren
     if (native_root / 'key.txt').read_text().strip() != key or (native_root / 'tag.txt').read_text().strip() != '0.153.3':
         raise SystemExit('Pinned Skia native archive key/tag mismatch')
     original_symbols, original_payloads, hashes = {}, {}, {}
-    libraries = sorted(native_root.glob('*.a' if native_target == 'linux' else '*.lib'))
+    libraries = sorted(native_root.glob('*.lib' if native_target == 'windows' else '*.a'))
     if native_target == 'windows':
         for library in libraries:
             directives = subprocess.check_output(['llvm-readobj', '--coff-directives', str(library)], text=True)
@@ -158,7 +209,7 @@ with tempfile.TemporaryDirectory(prefix='skia-native-prepare-', dir=target.paren
         original_payloads[library.name] = archive_members(library)
         hashes[library.name] = {'upstream_sha256': hashlib.sha256(library.read_bytes()).hexdigest()}
     references = [line for lines in original_symbols.values() for line in lines if line.split()[-1:] == [old_symbol]]
-    if len(references) != 9 or sum(' R ' in line for line in references) != 1:
+    if len(references) != 9 or sum(definition in line for line in references) != 1:
         raise SystemExit('Unexpected pinned JPEG table definitions/references: ' + repr(references))
     for library in libraries:
         expected = [line[:-len(old_symbol)] + new_symbol if line.split()[-1:] == [old_symbol] else line for line in original_symbols[library.name]]

@@ -100,9 +100,11 @@ nix-shell --impure testing/display/shell.nix --run 'scripts/run-framework-isolat
 The Nix shells supply checksum-pinned native inputs. Linux uses the upstream
 Skia 0.153.3 archive. Windows builds the same pinned Skia source and
 dependencies with `/MT`, matching WebRTC's static release runtime; the [Windows
-guide](windows-beta.md) covers that build. Both libraries define
-`jpeg_natural_order`, so the Skia archive preparation privately renames that
-one table and its references (`nix/prepare-skia-native.py`). Production Cargo
+guide](windows-beta.md) covers that build. macOS uses the upstream
+aarch64-apple-darwin archive, prepared into `~/Library/Caches/yapfast-build`.
+Both libraries define `jpeg_natural_order`, so the Skia archive preparation
+privately renames that one table and its references
+(`nix/prepare-skia-native.py`, for ELF, COFF and Mach-O). Production Cargo
 disables implicit Skia source compilation.
 
 The Windows package includes the Slint UI build sources and Skia notices.
