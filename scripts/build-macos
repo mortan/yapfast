@@ -15,5 +15,6 @@ esac
 shift $(($# > 0 ? 1 : 0))
 source scripts/macos-env
 source scripts/release-env aarch64-apple-darwin
-cargo build --locked --release --target aarch64-apple-darwin "${features[@]}"
+# macOS's bash 3.2 calls an empty array unbound under `set -u`.
+cargo build --locked --release --target aarch64-apple-darwin ${features[@]+"${features[@]}"}
 python3 scripts/package-macos.py --flavour "$flavour" "$@"
