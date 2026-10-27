@@ -1,7 +1,7 @@
 //! A colour bitmap font made at runtime, so Discord's custom emoji show inline
 //! in message text: Slint's `StyledText` draws only glyphs. Each emoji is a PNG
 //! in a CBDT table, the format of the Noto Color Emoji build Yapfast already draws,
-//! at a Private Use Area code point. The font's vertical metrics are the UI
+//! at a Private Use Area code point; on macOS in an `sbix` table, see [`build`]. The font's vertical metrics are the UI
 //! typeface's, Atkinson Hyperlegible Next's, so a line with an emoji keeps its
 //! baseline.
 
@@ -25,6 +25,7 @@ const ADVANCE: u8 = 140;
 
 /// A font with each PNG of `glyphs`, which must be [`SIDE`] pixels square, at
 /// its code point. Glyph 0 is the empty `.notdef`.
+#[cfg(not(target_os = "macos"))]
 pub fn build(family: &str, glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
     let count = u16::try_from(glyphs.len() + 1).expect("fewer than 65535 glyphs");
     let advance = units(i32::from(ADVANCE));
@@ -39,6 +40,36 @@ pub fn build(family: &str, glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
         (*b"maxp", maxp(count)),
         (*b"name", name(family)),
         (*b"post", post()),
+    ];
+    assemble(&tables)
+}
+
+/// A font with each PNG of `glyphs`, which must be [`SIDE`] pixels square, at
+/// its code point. Glyph 0 is the empty `.notdef`. CoreText, which Skia draws
+/// text with on macOS, loads no font without outlines and draws no CBDT, so
+/// here the PNGs are in an `sbix` table, Apple Color Emoji's format, and every
+/// glyph shares one square outline the size of its picture, which CoreText
+/// takes as the glyph's bounds and doesn't draw.
+#[cfg(target_os = "macos")]
+pub fn build(family: &str, glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
+    let count = u16::try_from(glyphs.len() + 1).expect("fewer than 65535 glyphs");
+    let advance = units(i32::from(ADVANCE));
+    let (glyf, loca) = outlines(count);
+    let mut head = head(advance);
+    // `loca` has long offsets.
+    head[50..52].copy_from_slice(&1u16.to_be_bytes());
+    let tables: [([u8; 4], Vec<u8>); 11] = [
+        (*b"OS/2", os2(advance, glyphs)),
+        (*b"cmap", cmap(glyphs)),
+        (*b"glyf", glyf),
+        (*b"head", head),
+        (*b"hhea", hhea(advance, count)),
+        (*b"hmtx", hmtx(advance, count)),
+        (*b"loca", loca),
+        (*b"maxp", maxp_with_outlines(count)),
+        (*b"name", name(family)),
+        (*b"post", post()),
+        (*b"sbix", sbix(glyphs)),
     ];
     assemble(&tables)
 }
@@ -80,6 +111,7 @@ fn units(pixels: i32) -> i16 {
     i16::try_from(pixels * i32::from(UNITS_PER_EM) / i32::from(PPEM)).expect("fits a font unit")
 }
 
+#[cfg(any(not(target_os = "macos"), test))]
 fn put8(out: &mut Vec<u8>, value: u8) {
     out.push(value);
 }
@@ -101,6 +133,7 @@ fn checksum(data: &[u8]) -> u32 {
 }
 
 /// The bitmaps: each a small metrics record and its PNG (glyph format 17).
+#[cfg(not(target_os = "macos"))]
 fn cbdt(glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
     let mut out = Vec::new();
     put16(&mut out, 3);
@@ -118,6 +151,7 @@ fn cbdt(glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
 }
 
 /// Where each glyph's bitmap is in CBDT: one strike, one index of offsets.
+#[cfg(not(target_os = "macos"))]
 fn cblc(glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
     const SIZE_RECORD: u32 = 48;
     let count = glyphs.len();
@@ -296,7 +330,90 @@ fn hmtx(advance: i16, count: u16) -> Vec<u8> {
     out
 }
 
+/// The bitmaps, at one strike: each glyph's PNG, placed at its outline.
+#[cfg(target_os = "macos")]
+fn sbix(glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
+    const HEADER: usize = 8 + 4;
+    let mut out = Vec::new();
+    // Version 1; bit 0 is always set, and bit 1 clear: the outlines aren't drawn.
+    put16(&mut out, 1);
+    put16(&mut out, 1);
+    put32(&mut out, 1);
+    put32(&mut out, HEADER as u32);
+    put16(&mut out, u16::from(PPEM));
+    put16(&mut out, 72);
+    // Offsets from the strike's start: `.notdef` has no data, then each PNG
+    // after its 8 bytes of origin and type.
+    let mut offset = 4 + 4 * (glyphs.len() as u32 + 2);
+    put32(&mut out, offset);
+    put32(&mut out, offset);
+    for (_, png) in glyphs {
+        offset += 8 + png.len() as u32;
+        put32(&mut out, offset);
+    }
+    for (_, png) in glyphs {
+        // CoreText puts the bitmap's bottom left corner at the outline's,
+        // and then moves it by these, so they're 0.
+        put16(&mut out, 0);
+        put16(&mut out, 0);
+        out.extend_from_slice(b"png ");
+        out.extend_from_slice(png);
+    }
+    out
+}
+
+/// Each glyph's outline but `.notdef`'s, a square of the picture's bounds,
+/// and the long offsets to them.
+#[cfg(target_os = "macos")]
+fn outlines(count: u16) -> (Vec<u8>, Vec<u8>) {
+    let (left, bottom) = (
+        units(i32::from(BEARING_X)),
+        units(i32::from(BEARING_Y) - SIDE as i32),
+    );
+    let (right, top) = (left + units(SIDE as i32), units(i32::from(BEARING_Y)));
+    let mut square = Vec::new();
+    // One contour of four points, its bounds, the last point's index and no
+    // instructions.
+    for value in [1, left, bottom, right, top, 3, 0] {
+        put16(&mut square, value as u16);
+    }
+    // Each point on the curve, its x and y moves 16 bits each.
+    square.extend([1; 4]);
+    for value in [
+        left,
+        right - left,
+        0,
+        left - right,
+        bottom,
+        0,
+        top - bottom,
+        0,
+    ] {
+        put16(&mut square, value as u16);
+    }
+    let glyf = square.repeat(usize::from(count) - 1);
+    let mut loca = Vec::new();
+    put32(&mut loca, 0);
+    for index in 0..count {
+        put32(&mut loca, (usize::from(index) * square.len()) as u32);
+    }
+    (glyf, loca)
+}
+
+/// Version 1, for a font with outlines: the glyph count, and the most points
+/// and contours a glyph has.
+#[cfg(target_os = "macos")]
+fn maxp_with_outlines(count: u16) -> Vec<u8> {
+    let mut out = Vec::new();
+    put32(&mut out, 0x0001_0000);
+    for value in [count, 4, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] {
+        put16(&mut out, value);
+    }
+    out
+}
+
 /// Version 0.5: the glyph count alone, for a font without outlines.
+#[cfg(not(target_os = "macos"))]
 fn maxp(count: u16) -> Vec<u8> {
     let mut out = Vec::new();
     put32(&mut out, 0x0000_5000);

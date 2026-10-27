@@ -273,8 +273,9 @@ an error.
   picker, which lists them by server after the frequently used ones, the open
   server's first. In messages Yapfast draws them as text: each emoji whose
   picture arrived gets a code point in the Supplementary Private Use Area B,
-  and each batch of them a colour bitmap (CBDT) font made on the fly, which
-  text falls back to after Satoshi, so they wrap and select like letters.
+  and each batch of them a colour bitmap font made on the fly (CBDT; on
+  macOS sbix, which CoreText draws), which text falls back to after
+  Satoshi, so they wrap and select like letters.
   The picker, suggestions and reaction buttons show the picture itself, so
   the hundreds a picker lists add no fonts; a quiet square holds each place
   until its picture arrives. A message of only
