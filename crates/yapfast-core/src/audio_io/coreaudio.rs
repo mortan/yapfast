@@ -13,7 +13,8 @@
 //! default changes, so [`endpoint`] names the device by its UID for
 //! `lasting.rs` to follow, as on Windows. The frameworks are declared here
 //! rather than through the objc2 bindings: a dozen C functions, with no
-//! Objective-C, don't need a crate.
+//! Objective-C, don't need a crate. Hearing the other applications for Go
+//! Live is [`tap`]'s.
 
 use std::{
     cell::UnsafeCell,
@@ -38,6 +39,11 @@ const RECORDING: Duration = Duration::from_millis(200);
 const SILENCE: Duration = Duration::from_secs(2);
 /// How WebRTC's device module names the default device.
 const DEFAULT: &str = "default";
+
+#[cfg(feature = "discord")]
+mod tap;
+#[cfg(feature = "discord")]
+pub use tap::others;
 
 /// The parts of Core Audio, AudioToolbox and CoreFoundation used here, as
 /// their headers declare them.
@@ -333,53 +339,57 @@ fn string(object: AudioObjectID, selector: u32) -> Option<String> {
     }
 }
 
-/// Every device with streams to play to, or to record from.
-fn devices(output: bool) -> Vec<AudioObjectID> {
-    let system = address(sys::DEVICES, sys::SCOPE_GLOBAL);
+/// A list of objects the system has, such as its devices.
+fn objects(selector: u32) -> Vec<AudioObjectID> {
+    let list = address(selector, sys::SCOPE_GLOBAL);
     let mut size = 0;
     // SAFETY: the list is read into a buffer as large as Core Audio says.
     unsafe {
-        if sys::AudioObjectGetPropertyDataSize(
-            sys::SYSTEM_OBJECT,
-            &system,
-            0,
-            ptr::null(),
-            &mut size,
-        ) != 0
+        if sys::AudioObjectGetPropertyDataSize(sys::SYSTEM_OBJECT, &list, 0, ptr::null(), &mut size)
+            != 0
         {
             return Vec::new();
         }
-        let mut devices = vec![0 as AudioObjectID; size as usize / size_of::<AudioObjectID>()];
+        let mut objects = vec![0 as AudioObjectID; size as usize / size_of::<AudioObjectID>()];
         if sys::AudioObjectGetPropertyData(
             sys::SYSTEM_OBJECT,
-            &system,
+            &list,
             0,
             ptr::null(),
             &mut size,
-            devices.as_mut_ptr().cast(),
+            objects.as_mut_ptr().cast(),
         ) != 0
         {
             return Vec::new();
         }
-        devices.truncate(size as usize / size_of::<AudioObjectID>());
-        let scope = if output {
-            sys::SCOPE_OUTPUT
-        } else {
-            sys::SCOPE_INPUT
-        };
-        devices.retain(|&device| {
-            let mut size = 0;
+        objects.truncate(size as usize / size_of::<AudioObjectID>());
+        objects
+    }
+}
+
+/// Every device with streams to play to, or to record from.
+fn devices(output: bool) -> Vec<AudioObjectID> {
+    let mut devices = objects(sys::DEVICES);
+    let scope = if output {
+        sys::SCOPE_OUTPUT
+    } else {
+        sys::SCOPE_INPUT
+    };
+    devices.retain(|&device| {
+        let mut size = 0;
+        // SAFETY: a plain read of the size of the device's stream list.
+        let status = unsafe {
             sys::AudioObjectGetPropertyDataSize(
                 device,
                 &address(sys::STREAMS, scope),
                 0,
                 ptr::null(),
                 &mut size,
-            ) == 0
-                && size > 0
-        });
-        devices
-    }
+            )
+        };
+        status == 0 && size > 0
+    });
+    devices
 }
 
 /// The device behind an id, or the default one for `None`.
@@ -845,6 +855,8 @@ struct Recording {
     rendered: UnsafeCell<Box<[u8]>>,
     channels: u32,
     frame: usize,
+    /// Why reading fails once the device stops calling back.
+    stopped: &'static str,
 }
 
 /// The recording unit's IO thread has samples.
@@ -901,10 +913,7 @@ impl Recording {
     /// Waits until something's in the ring.
     fn wait(&self) -> Result<()> {
         while self.ring.len() == 0 {
-            ensure!(
-                self.wake.wait(|| self.ring.len() > 0),
-                "the microphone stopped"
-            );
+            ensure!(self.wake.wait(|| self.ring.len() > 0), self.stopped);
         }
         Ok(())
     }
@@ -927,7 +936,7 @@ impl Converter {
         // SAFETY: plain calls; disposed of when dropped.
         check(
             unsafe { sys::AudioConverterNew(from, to, &mut converter) },
-            "can't convert the microphone's rate",
+            "can't convert the sound's rate",
         )?;
         Ok(Self {
             converter,
@@ -972,9 +981,9 @@ impl Converter {
                     ptr::null_mut(),
                 )
             };
-            ensure!(!supply.stopped, "the microphone stopped");
-            check(status, "can't convert the microphone's rate")?;
-            ensure!(frames > 0, "the microphone stopped");
+            ensure!(!supply.stopped, recording.stopped);
+            check(status, "can't convert the sound's rate")?;
+            ensure!(frames > 0, recording.stopped);
             filled += frames as usize * frame;
         }
         Ok(())
@@ -1074,6 +1083,7 @@ impl Input {
             rendered: UnsafeCell::new(vec![0; slice * frame].into_boxed_slice()),
             channels: u32::from(format.channels),
             frame,
+            stopped: "the microphone stopped",
         });
         unit.set(
             sys::SET_INPUT_CALLBACK,
@@ -1150,6 +1160,7 @@ mod tests {
             rendered: UnsafeCell::new(Box::new([])),
             channels: 1,
             frame,
+            stopped: "the microphone stopped",
         };
         let tone: Vec<u8> = (0..24_000)
             .flat_map(|at| {

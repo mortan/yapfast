@@ -1,7 +1,9 @@
 //! Builds the Go Live codec shims, the GIF thumbnail encoder, the video file
 //! reader and the cameras against the libvpx, FFmpeg, dav1d, libyuv and
 //! WebRTC headers in the same libwebrtc archive webrtc-sys links, so they
-//! match its code, and the H264 encoder against x264 (vendor/x264-src).
+//! match its code, and the H264 encoder against x264 (vendor/x264-src). On
+//! macOS it also builds the process tap's Objective-C part, for Go Live's
+//! sound.
 
 fn main() {
     for file in [
@@ -13,6 +15,7 @@ fn main() {
         "picture.c",
         "camera.cc",
         "camera_mac.m",
+        "tap_mac.m",
         "hwenc.c",
         "hevc.c",
         "vtdec.c",
@@ -110,6 +113,15 @@ fn main() {
         ffmpeg.compile("yapfast_hwenc");
         println!("cargo:rustc-cfg=hwenc");
         println!("cargo:rustc-cfg=hevcdec");
+    }
+    // Go Live's sound on macOS: a process tap, whose description is an
+    // Objective-C object.
+    if target_os == "macos" {
+        cc::Build::new()
+            .file("native/tap_mac.m")
+            .flag("-fobjc-arc")
+            .warnings(true)
+            .compile("yapfast_tap");
     }
     if videotoolbox {
         println!("cargo:rustc-cfg=hwenc");

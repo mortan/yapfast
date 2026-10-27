@@ -11,7 +11,10 @@
 //! here yet.
 
 use std::{marker::PhantomData, time::Duration};
-#[cfg(all(feature = "discord", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(
+    feature = "discord",
+    any(target_os = "linux", target_os = "windows", target_os = "macos")
+))]
 use std::{
     sync::{Arc, atomic::AtomicBool},
     thread::JoinHandle,
@@ -209,9 +212,12 @@ impl<S: Sample> Input<S> {
     }
 }
 
-/// What [`others`] hears from the other applications playing. Only Linux and
-/// Windows hear them yet.
-#[cfg(all(feature = "discord", any(target_os = "linux", target_os = "windows")))]
+/// What [`others`] hears from the other applications playing. Only Linux,
+/// Windows and macOS hear them.
+#[cfg(all(
+    feature = "discord",
+    any(target_os = "linux", target_os = "windows", target_os = "macos")
+))]
 pub enum Heard<'a> {
     /// An application started playing, from this process when the system says.
     Started {
@@ -231,9 +237,12 @@ pub enum Heard<'a> {
 /// Hears what every other application plays, at [`RATE`] in stereo, on a
 /// thread of its own until `stop`. Yapfast's own processes are left out. On
 /// Linux each application comes on its own, and those whose name or program
-/// `skip` picks are left out too; Windows mixes them all into one.
+/// `skip` picks are left out too; Windows and macOS mix them all into one.
 /// Returns once it hears, or with why it can't.
-#[cfg(all(feature = "discord", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(
+    feature = "discord",
+    any(target_os = "linux", target_os = "windows", target_os = "macos")
+))]
 pub fn others(
     skip: fn(&str) -> bool,
     heard: impl FnMut(Heard<'_>) + Send + 'static,
@@ -242,7 +251,10 @@ pub fn others(
     platform::others(skip, Box::new(heard), stop)
 }
 
-#[cfg(all(feature = "discord", any(target_os = "linux", target_os = "windows")))]
+#[cfg(all(
+    feature = "discord",
+    any(target_os = "linux", target_os = "windows", target_os = "macos")
+))]
 type Hear = Box<dyn FnMut(Heard<'_>) + Send>;
 
 #[cfg(test)]
@@ -378,7 +390,10 @@ mod tests {
     }
 
     /// Hears a tone another process plays, and not one this process plays.
-    #[cfg(all(feature = "discord", any(target_os = "linux", target_os = "windows")))]
+    #[cfg(all(
+        feature = "discord",
+        any(target_os = "linux", target_os = "windows", target_os = "macos")
+    ))]
     #[test]
     #[ignore = "needs a sound server that hears other applications"]
     fn hears_other_applications() {

@@ -118,8 +118,19 @@ as plain Opus RTP on the stream's audio SSRC, DAVE-encrypted, with sender
 reports, and op 5 marks them as shared sound (speaking flag 2). Nothing is
 sent while no application plays. On Windows, WASAPI's process loopback hears
 everything but Yapfast's own process tree as one stream, from Windows 10's 2004
-update on; it can't leave other Discord clients out. Other systems share
-video only for now, and so does the test pattern. Two ignored tests check the capture against the
+update on; it can't leave other Discord clients out. On macOS, from 14.4
+on, a Core Audio process tap does the same (`audio_io/coreaudio/tap.rs`,
+with `native/tap_mac.m` making the tap's Objective-C description): a stereo
+mixdown of every process but Yapfast's own, still heard on the speakers,
+recorded through a private aggregate device of the tap alone, and converted
+to 48 kHz when the tap runs at another rate. Yapfast's own are the worker
+itself, the Yapfast that started it and that one's other workers; a process
+joins Core Audio's list only once it uses sound, so the tap is updated as
+the list changes. It needs the System Audio Recording permission, which the
+app asks for with `NSAudioCaptureUsageDescription`; without it macOS hands
+over silence, and nothing is sent. Like Windows it can't leave other
+Discord clients out. Other systems share video only for now, and so does
+the test pattern. Two ignored tests check the capture against the
 machine's sound server with a quiet tone: another process's is heard, and
 Yapfast's own is not.
 
