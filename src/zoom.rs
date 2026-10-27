@@ -1,5 +1,6 @@
 //! Zooming the whole window, as browsers do: Ctrl with + or -, or with the
-//! scroll wheel, steps through [`LEVELS`], and Ctrl+0 returns to 100%.
+//! scroll wheel, steps through [`LEVELS`], and Ctrl+0 returns to 100%. On
+//! macOS the key is Cmd, as there in browsers; see [`command`].
 //!
 //! Slint draws everything in logical pixels, so the zoom multiplies the
 //! display's own scale factor: text, spacing and pictures all grow together,
@@ -7,7 +8,7 @@
 
 use slint::winit_030::winit::{
     event::{ElementState, MouseScrollDelta, WindowEvent},
-    keyboard::{Key, KeyCode, PhysicalKey},
+    keyboard::{Key, KeyCode, ModifiersState, PhysicalKey},
 };
 
 /// The zoom levels, smallest first: 5% apart up to 150%, where small changes
@@ -27,7 +28,18 @@ const MIN_HEIGHT: f32 = 560.;
 /// makes one step.
 const PIXELS_PER_STEP: f64 = 60.;
 
-/// What Ctrl and a key or the wheel asked for.
+/// Whether the zoom key is held: Ctrl, or Cmd on macOS. These events come
+/// from winit before Slint's, so Slint's swap of the two on macOS, which
+/// makes `modifiers.control` in `.slint` Cmd, doesn't apply here.
+fn command(modifiers: ModifiersState) -> bool {
+    if cfg!(target_os = "macos") {
+        modifiers.super_key()
+    } else {
+        modifiers.control_key()
+    }
+}
+
+/// What Ctrl (Cmd on macOS) and a key or the wheel asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
     In,
@@ -35,7 +47,7 @@ pub enum Step {
     Reset,
 }
 
-/// Follows Ctrl and the keys and wheel that zoom.
+/// Follows Ctrl (Cmd on macOS) and the keys and wheel that zoom.
 #[derive(Default)]
 pub struct Keys {
     control: bool,
@@ -60,7 +72,7 @@ impl Keys {
     pub fn event(&mut self, event: &WindowEvent) -> Outcome {
         match event {
             WindowEvent::ModifiersChanged(modifiers) => {
-                self.control = modifiers.state().control_key();
+                self.control = command(modifiers.state());
                 self.alt = modifiers.state().alt_key();
                 if !self.control {
                     self.scrolled = 0.;
@@ -115,7 +127,7 @@ impl Keys {
                 }
             }
             WindowEvent::Focused(false) => {
-                // Ctrl may be let go elsewhere.
+                // Ctrl or Cmd may be let go elsewhere.
                 self.control = false;
                 self.alt = false;
                 self.scrolled = 0.;
@@ -126,9 +138,10 @@ impl Keys {
     }
 }
 
-/// The step a key asks for with Ctrl held. The typed character decides, so
-/// any keyboard layout's + and - work; the keypad's keys and the 0 key's
-/// place work too, for layouts whose 0 key types something else.
+/// The step a key asks for with Ctrl (Cmd on macOS) held. The typed
+/// character decides, so any keyboard layout's + and - work; the keypad's
+/// keys and the 0 key's place work too, for layouts whose 0 key types
+/// something else.
 fn key_step(key: &Key, physical: PhysicalKey) -> Option<Step> {
     if let Key::Character(text) = key {
         match text.as_str() {
@@ -245,7 +258,6 @@ mod tests {
         use slint::winit_030::winit::{
             dpi::PhysicalPosition,
             event::{DeviceId, TouchPhase},
-            keyboard::ModifiersState,
         };
         let mut keys = Keys::default();
         let wheel = |delta| WindowEvent::MouseWheel {
@@ -258,9 +270,12 @@ mod tests {
             matches!(keys.event(&pixels(30.)), Outcome::Pass),
             "without Ctrl it scrolls"
         );
-        keys.event(&WindowEvent::ModifiersChanged(
-            ModifiersState::CONTROL.into(),
-        ));
+        let command = if cfg!(target_os = "macos") {
+            ModifiersState::SUPER
+        } else {
+            ModifiersState::CONTROL
+        };
+        keys.event(&WindowEvent::ModifiersChanged(command.into()));
         assert!(matches!(keys.event(&pixels(30.)), Outcome::Taken));
         assert!(matches!(keys.event(&pixels(40.)), Outcome::Step(Step::In)));
         assert!(matches!(keys.event(&pixels(-20.)), Outcome::Taken));

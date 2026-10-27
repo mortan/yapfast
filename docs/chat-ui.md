@@ -231,9 +231,9 @@ errors make it taller than the minimum window. SSO and OAuth are still pending.
 
 ## Layout and look
 
-Ctrl with + or -, or with the scroll wheel, zooms the whole window, text and
-layout together, from 50% to 200%: 5% a step up to 150%, then 10%. Ctrl+0
-returns to 100%. The level shows
+Ctrl (Cmd on macOS) with + or -, or with the scroll wheel, zooms the whole
+window, text and layout together, from 50% to 200%: 5% a step up to 150%,
+then 10%. Ctrl+0 (Cmd+0) returns to 100%. The level shows
 for a moment at the top and is kept in `layout.json`. Yapfast multiplies the
 display's scale factor by it, so the window lays out in fewer logical pixels,
 and zooming in stops before those would fall below the window's 800×560

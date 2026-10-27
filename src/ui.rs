@@ -277,8 +277,8 @@ const EVENT_BATCH: usize = 256;
 const ZOOM_NOTE: Duration = Duration::from_millis(1200);
 
 /// Follows the native window's focus, for notifications, zooms the window
-/// with Ctrl and +, - and 0 or the scroll wheel, keeping the level in the
-/// layout, and takes files dropped on it.
+/// with Ctrl (Cmd on macOS) and +, - and 0 or the scroll wheel, keeping the
+/// level in the layout, and takes files dropped on it.
 fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
     use slint::winit_030::{
         EventResult,
