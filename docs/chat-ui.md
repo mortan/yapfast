@@ -158,7 +158,9 @@ errors make it taller than the minimum window. SSO and OAuth are still pending.
   which then says why until Got It, a click or the next drag: "Too many
   uploads!" past ten files with those waiting, "Your files are too powerful"
   with "Max file size is 20.00 MB please." for a file past the limit, and
-  "Invalid file type" for a folder. winit takes drops on X11 and Windows; on
+  "Invalid file type" for a folder. winit takes drops on X11, Windows and
+  macOS, without the pointer's place, which Yapfast asks X11, Win32 or
+  AppKit for while the files hover; on
   Wayland, where it has none, Yapfast keeps a data device for each seat on
   winit's own connection, which a small thread watches, and takes
   `text/uri-list`. A drop is taken only where the composer can take files,

@@ -18,11 +18,13 @@ pub enum Drag {
 }
 
 /// Where the pointer is over a window, for the drags winit reports without
-/// it: on X11 and Windows. One is made for each drag and asked while the
-/// files hover.
+/// it: on X11, Windows and macOS. One is made for each drag and asked while
+/// the files hover.
 pub struct Pointer {
     source: Source,
     /// The window's scale, from its physical pixels to its logical ones.
+    /// AppKit gives logical ones.
+    #[cfg(not(target_os = "macos"))]
     scale: f64,
 }
 
@@ -32,9 +34,9 @@ enum Source {
     X11(x11rb::rust_connection::RustConnection, u32),
     #[cfg(windows)]
     Win32(isize),
-    /// An AppKit window, which doesn't say where the pointer is yet.
+    /// The window's AppKit view.
     #[cfg(target_os = "macos")]
-    AppKit,
+    AppKit(appkit::View),
 }
 
 impl Pointer {
@@ -49,11 +51,12 @@ impl Pointer {
             #[cfg(windows)]
             RawWindowHandle::Win32(handle) => Source::Win32(handle.hwnd.get()),
             #[cfg(target_os = "macos")]
-            RawWindowHandle::AppKit(_) => Source::AppKit,
+            RawWindowHandle::AppKit(handle) => Source::AppKit(appkit::View::new(handle.ns_view)),
             _ => return None,
         };
         Some(Self {
             source,
+            #[cfg(not(target_os = "macos"))]
             scale: window.scale_factor(),
         })
     }
@@ -76,10 +79,13 @@ impl Pointer {
             Source::X11(connection, window) => {
                 use x11rb::protocol::xproto::ConnectionExt;
                 let pointer = connection.query_pointer(*window).ok()?.reply().ok()?;
-                Some((f64::from(pointer.win_x), f64::from(pointer.win_y)))
+                (
+                    f64::from(pointer.win_x) / self.scale,
+                    f64::from(pointer.win_y) / self.scale,
+                )
             }
             #[cfg(target_os = "macos")]
-            Source::AppKit => None,
+            Source::AppKit(view) => view.pointer()?,
             #[cfg(windows)]
             Source::Win32(hwnd) => {
                 use windows_sys::Win32::Foundation::POINT;
@@ -93,13 +99,91 @@ impl Pointer {
                 {
                     return None;
                 }
-                Some((f64::from(point.x), f64::from(point.y)))
+                (
+                    f64::from(point.x) / self.scale,
+                    f64::from(point.y) / self.scale,
+                )
             }
-        }?;
-        Some(Drag::Moved {
-            x: x / self.scale,
-            y: y / self.scale,
-        })
+        };
+        Some(Drag::Moved { x, y })
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod appkit {
+    //! The pointer over an AppKit view: AppKit sends a drag's moves to the
+    //! view's dragging destination, which is winit's, and winit passes on no
+    //! position.
+
+    use std::ffi::c_void;
+    use std::ptr::NonNull;
+
+    use crate::objc::{Id, class, objc_release, objc_retain, send};
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Point {
+        x: f64,
+        y: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Rect {
+        origin: Point,
+        size: Point,
+    }
+
+    /// A view, kept alive while a drag goes on. Used on the main thread only,
+    /// as AppKit asks.
+    pub struct View(NonNull<c_void>);
+
+    impl View {
+        pub fn new(view: NonNull<c_void>) -> Self {
+            // SAFETY: winit's handle is a live NSView.
+            unsafe { objc_retain(view.as_ptr()) };
+            Self(view)
+        }
+
+        /// Where the pointer is, in the view's logical pixels from its top
+        /// left corner, unless the view has no window.
+        pub fn pointer(&self) -> Option<(f64, f64)> {
+            let view = self.0.as_ptr();
+            // SAFETY: each message is sent to a live object with the
+            // argument and result types AppKit declares for it.
+            unsafe {
+                let window: Id = send!(view, "window"; Id);
+                if window.is_null() {
+                    return None;
+                }
+                let screen: Point = send!(class(c"NSEvent"), "mouseLocation"; Point);
+                let in_window: Point =
+                    send!(window, "convertPointFromScreen:", screen => Point; Point);
+                let point: Point = send!(
+                    view,
+                    "convertPoint:fromView:",
+                    in_window => Point,
+                    std::ptr::null_mut() => Id;
+                    Point
+                );
+                let bounds: Rect = send!(view, "bounds"; Rect);
+                let flipped: bool = send!(view, "isFlipped"; bool);
+                // AppKit's y goes up from the bottom, unless the view is flipped.
+                let y = if flipped {
+                    point.y - bounds.origin.y
+                } else {
+                    bounds.origin.y + bounds.size.y - point.y
+                };
+                Some((point.x - bounds.origin.x, y))
+            }
+        }
+    }
+
+    impl Drop for View {
+        fn drop(&mut self) {
+            // SAFETY: `new` retained it.
+            unsafe { objc_release(self.0.as_ptr()) };
+        }
     }
 }
 

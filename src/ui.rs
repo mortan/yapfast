@@ -354,7 +354,7 @@ fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
                         }
                     });
                 }
-                // winit takes drops on X11 and Windows; see watch_wayland_drops.
+                // winit takes drops on X11, Windows and macOS; see watch_wayland_drops.
                 match event {
                     WindowEvent::HoveredFile(_) if !hovering => {
                         hovering = true;
