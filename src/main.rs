@@ -79,7 +79,14 @@ fn main() -> Result<()> {
         Some(directory) if !has_console() => logging::init_to_file(&directory.join("yapfast.log")),
         _ => logging::init(),
     }
-    #[cfg(not(all(windows, feature = "desktop")))]
+    #[cfg(all(target_os = "macos", feature = "desktop"))]
+    match std::env::var_os("HOME") {
+        Some(home) if !has_output() => logging::init_to_file(
+            &std::path::Path::new(&home).join("Library/Logs/Yapfast/yapfast.log"),
+        ),
+        _ => logging::init(),
+    }
+    #[cfg(not(all(any(windows, target_os = "macos"), feature = "desktop")))]
     logging::init();
     yapfast_core::init_tls()?;
 
@@ -172,6 +179,24 @@ fn has_console() -> bool {
         let output = GetStdHandle(STD_OUTPUT_HANDLE);
         (!output.is_null() && output != INVALID_HANDLE_VALUE)
             || AttachConsole(ATTACH_PARENT_PROCESS) != 0
+    }
+}
+
+/// Whether Yapfast's output reaches someone: a terminal, file or pipe. Opened
+/// from Finder or the Dock, launchd gives it /dev/null, so it logs to
+/// ~/Library/Logs, where Console finds it.
+#[cfg(all(target_os = "macos", feature = "desktop"))]
+fn has_output() -> bool {
+    use std::os::{fd::AsFd, unix::fs::MetadataExt};
+    let Ok(output) = std::io::stdout().as_fd().try_clone_to_owned() else {
+        return false;
+    };
+    match (
+        std::fs::File::from(output).metadata(),
+        std::fs::metadata("/dev/null"),
+    ) {
+        (Ok(output), Ok(null)) => output.rdev() != null.rdev(),
+        _ => false,
     }
 }
 

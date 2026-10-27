@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Builds Yapfast.app for Apple silicon into target/dist/macos, with its ZIP:
+# a release build with source paths that name no folder here
+# (scripts/release-env), packed by scripts/package-macos.py.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+# The Discord flavour is the release; full adds Matrix, as a separate preview.
+# Arguments after the flavour go to scripts/package-macos.py.
+flavour=${1:-discord}
+case $flavour in
+  discord) features=(--no-default-features --features desktop,discord) ;;
+  full) features=() ;;
+  *) echo "usage: scripts/build-macos [discord|full] [package-macos.py options]" >&2; exit 2 ;;
+esac
+shift $(($# > 0 ? 1 : 0))
+source scripts/macos-env
+source scripts/release-env aarch64-apple-darwin
+cargo build --locked --release --target aarch64-apple-darwin "${features[@]}"
+python3 scripts/package-macos.py --flavour "$flavour" "$@"

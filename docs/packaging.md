@@ -1,6 +1,6 @@
 # Packaging and releases
 
-How the Linux and Windows releases are made and published. Building and
+How the Linux, Windows and macOS releases are made and published. Building and
 checking Yapfast for development is in [building](building.md).
 
 ## Linux AppImage
@@ -76,6 +76,55 @@ becomes `0.2.0nightly.20261020.5`, which pacman sorts after 0.1.0 and before
 sort it after 0.2.0. `sudo pacman -U` installs the file or its link; there's no
 repository, so `pacman -Syu` doesn't update it.
 
+## macOS app
+
+`scripts/build-macos [discord|full]` makes `target/dist/Yapfast.app` for
+Apple silicon, and beside it in `target/dist/macos` the app's ZIP,
+`Yapfast-VERSION-macos-arm64.zip` (`-full-preview` before `-macos` for the
+full flavour), the source snapshot and `SHA256SUMS.txt`. It runs in
+`scripts/macos-env`, sources `scripts/release-env aarch64-apple-darwin`, so
+the binary names no folder of the machine that built it, and builds with
+`cargo build --release --target aarch64-apple-darwin`. macOS's `strip`
+leaves a proc macro's library unloadable, so the release profile strips only
+what ships, not build scripts and proc macros (`Cargo.toml`). A cold build
+takes about 7 minutes on an M4 Pro; packing takes seconds.
+
+`scripts/package-macos.py` lays the bundle out as macOS expects it:
+`Contents/Info.plist`, from `packaging/macos/Info.plist` with the version from
+`Cargo.toml` (without a nightly's suffix, as the plist's versions are
+numbers only); `Contents/MacOS/yapfast`; and `Contents/Resources` with the
+icon, the license, `SOURCE.txt`, `BUILD.json`, `THIRD-PARTY.json` and the
+dependencies' licenses and notices, through `scripts/release_package.py` as
+on Linux and Windows. rust-skia's prebuilt macOS Skia carries only Skia's own
+license, so the notices of the code linked into it, expat, libjpeg-turbo,
+libpng, Wuffs and zlib, come from their source at the revisions
+`nix/flake.nix` pins: the script downloads them once into
+`~/Library/Caches/yapfast-build`, checks each against the flake's hash and
+keeps only the license files.
+
+The Info.plist names the app `io.github.yapfast.Yapfast`, the Linux app ID,
+and carries the sentences macOS shows when Yapfast first asks for the
+microphone, the camera and other apps' sound (Go Live's, a Core Audio process
+tap). Screen recording, notifications and input monitoring take no sentence.
+Permissions belong to the app that asks: started from the `.app`, Yapfast
+asks for them itself; started from a terminal, macOS asks for the terminal.
+
+The script signs the bundle ad hoc (`codesign --sign -`), which Apple silicon
+requires of every program, without the hardened runtime, which only
+notarization needs, so no entitlements either. macOS ties permissions and
+Keychain access to the signature, and an ad hoc one changes with every build,
+so each build asks again. To keep them, sign with a stable identity, such as
+a self-signed code-signing certificate made in Keychain Access, named in
+`YAPFAST_CODESIGN_IDENTITY`. Neither is notarized, so Gatekeeper stops the
+downloaded app until it's allowed in System Settings › Privacy & Security, or
+its quarantine is removed (`xattr -dr com.apple.quarantine Yapfast.app`).
+`ditto -c -k --keepParent` zips the bundle as Finder would.
+
+Opened from Finder or the Dock, Yapfast's output goes to `/dev/null`, so it
+writes its log to `~/Library/Logs/Yapfast/yapfast.log` instead, where Console
+finds it (`src/main.rs`). Run from a terminal, or with its output going to a
+file or pipe, it logs there as on Linux.
+
 ## Nightly releases
 
 Releases are built locally, but a nightly of `main` builds on GitHub: Actions,
@@ -128,3 +177,8 @@ and links the icon into `yapfast.exe`, for Explorer and shortcuts; the window
 loads it from there for its title bar and the taskbar, each at the size
 Windows draws it. After changing `icon.svg`, run `scripts/make-windows-icon`
 to draw `yapfast.ico` again.
+
+On macOS the bundle's `packaging/macos/yapfast.icns` is the Dock's and
+Finder's icon. `scripts/make-macos-icon` draws it from `icon.svg` again, at
+each size from 16 to 1024 pixels, with the logo filling 824 of 1024 pixels as
+Apple's icon grid has it, so it matches other apps' icons in the Dock.

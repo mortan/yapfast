@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Yapfast.app's Info.plist. scripts/package-macos.py fills in @VERSION@,
+     the version from Cargo.toml without a nightly's suffix. -->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleDisplayName</key>
+	<string>Yapfast</string>
+	<key>CFBundleExecutable</key>
+	<string>yapfast</string>
+	<key>CFBundleIconFile</key>
+	<string>yapfast</string>
+	<key>CFBundleIdentifier</key>
+	<string>io.github.yapfast.Yapfast</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>Yapfast</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>@VERSION@</string>
+	<key>CFBundleVersion</key>
+	<string>@VERSION@</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.social-networking</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Yapfast sends your voice to the calls and voice channels you join.</string>
+	<key>NSCameraUsageDescription</key>
+	<string>Yapfast shows your camera to the people in a call when you turn it on.</string>
+	<key>NSAudioCaptureUsageDescription</key>
+	<string>Yapfast sends the sound of other apps along with the screen you share.</string>
+</dict>
+</plist>

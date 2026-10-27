@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# Draws packaging/macos/yapfast.icns from packaging/icon.svg, at each size
+# macOS asks for, from 16 px in Finder's lists to 1024 px on Retina displays.
+# The logo fills 824 of 1024 pixels, as Apple's icon grid has it, so that it
+# sits in the Dock as large as other apps' icons. Runs on macOS, which has
+# iconutil.
+set -euo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+iconset="$work/yapfast.iconset"
+mkdir "$iconset"
+for size in 16 32 128 256 512; do
+    for suffix in "" @2x; do
+        pixels=$size
+        [ -z "$suffix" ] || pixels=$((size * 2))
+        logo=$(((pixels * 824 + 512) / 1024))
+        magick -background none -density 1200 packaging/icon.svg -resize "${logo}x${logo}" \
+            -gravity center -extent "${pixels}x${pixels}" "PNG32:$iconset/icon_${size}x${size}$suffix.png"
+    done
+done
+iconutil --convert icns --output packaging/macos/yapfast.icns "$iconset"
