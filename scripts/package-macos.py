@@ -26,6 +26,8 @@ FLAVOURS = {
     "full": {"features": [], "suffix": "-full-preview"},
 }
 CACHE = Path.home() / "Library/Caches/yapfast-build"
+# scripts/make-macos-signing-identity makes it.
+SIGNING_KEYCHAIN = Path.home() / "Library/Keychains/yapfast-signing.keychain-db"
 # The third-party code in rust-skia's prebuilt macOS Skia, as its archive's
 # object files name it; nix/flake.nix pins each one's source.
 SKIA_DEPENDENCIES = ("expat", "libjpeg-turbo", "libpng", "wuffs", "zlib")
@@ -129,7 +131,12 @@ def skia_source():
 def sign(app, identity):
     # Without the hardened runtime, which only notarization needs, the app
     # needs no entitlements for the microphone, camera or screen.
-    subprocess.run(["codesign", "--force", "--sign", identity, "--timestamp=none", str(app)],
+    keychain = []
+    if identity == "Yapfast Dev" and SIGNING_KEYCHAIN.exists():
+        # Its password is empty; it relocks when the user logs out.
+        subprocess.run(["security", "unlock-keychain", "-p", "", str(SIGNING_KEYCHAIN)], check=True, timeout=30)
+        keychain = ["--keychain", str(SIGNING_KEYCHAIN)]
+    subprocess.run(["codesign", "--force", "--sign", identity, *keychain, "--timestamp=none", str(app)],
                    check=True, timeout=300)
     subprocess.run(["codesign", "--verify", "--deep", "--strict", str(app)], check=True, timeout=300)
 
@@ -172,7 +179,7 @@ def main():
         raise SystemExit("Packaging requires the pinned local Skia archive")
     skia_archive = Path(urllib.parse.unquote(skia_url.path))
     skia = skia_source()
-    identity = os.environ.get("YAPFAST_CODESIGN_IDENTITY") or "-"
+    identity = os.environ.get("YAPFAST_CODESIGN_IDENTITY") or ("Yapfast Dev" if SIGNING_KEYCHAIN.exists() else "-")
 
     releases = args.output / "macos"
     releases.mkdir(parents=True, exist_ok=True)

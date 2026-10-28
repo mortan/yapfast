@@ -1,0 +1,41 @@
+#!/usr/bin/env bash
+# Makes the self-signed code-signing identity "Yapfast Dev" that
+# scripts/package-macos.py signs Yapfast.app with, so that macOS keeps its
+# permissions and Keychain access across builds. It lives in a keychain of its
+# own, with an empty password: a shell outside the login session, such as
+# tmux or ssh, can't use the login keychain's keys, but it can unlock this one.
+set -euo pipefail
+keychain=~/Library/Keychains/yapfast-signing.keychain-db
+if [ -e "$keychain" ]; then
+    echo "$keychain already exists" >&2
+    exit 1
+fi
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+umask 077
+cat > "$work/req.cnf" <<'CNF'
+[req]
+distinguished_name = dn
+prompt = no
+x509_extensions = ext
+[dn]
+CN = Yapfast Dev
+[ext]
+basicConstraints = critical, CA:false
+keyUsage = critical, digitalSignature
+extendedKeyUsage = critical, codeSigning
+subjectKeyIdentifier = hash
+CNF
+openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -config "$work/req.cnf" \
+    -keyout "$work/key.pem" -out "$work/cert.pem" 2>/dev/null
+# security reads only the older PKCS #12 ciphers.
+openssl pkcs12 -export -inkey "$work/key.pem" -in "$work/cert.pem" -name "Yapfast Dev" \
+    -out "$work/identity.p12" -passout pass:yapfast \
+    -certpbe PBE-SHA1-3DES -keypbe PBE-SHA1-3DES -macalg sha1
+security create-keychain -p "" "$keychain"
+# No lock after a timeout or on sleep.
+security set-keychain-settings "$keychain"
+security unlock-keychain -p "" "$keychain"
+security import "$work/identity.p12" -k "$keychain" -P yapfast -T /usr/bin/codesign
+security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" "$keychain" >/dev/null
+echo "Made Yapfast Dev in $keychain"

@@ -109,16 +109,18 @@ tap). Screen recording, notifications and input monitoring take no sentence.
 Permissions belong to the app that asks: started from the `.app`, Yapfast
 asks for them itself; started from a terminal, macOS asks for the terminal.
 
-The script signs the bundle ad hoc (`codesign --sign -`), which Apple silicon
-requires of every program, without the hardened runtime, which only
-notarization needs, so no entitlements either. macOS ties permissions and
-Keychain access to the signature, and an ad hoc one changes with every build,
-so each build asks again. To keep them, sign with a stable identity, such as
-a self-signed code-signing certificate made in Keychain Access, named in
-`YAPFAST_CODESIGN_IDENTITY`. Neither is notarized, so Gatekeeper stops the
-downloaded app until it's allowed in System Settings › Privacy & Security, or
-its quarantine is removed (`xattr -dr com.apple.quarantine Yapfast.app`).
-`ditto -c -k --keepParent` zips the bundle as Finder would.
+Without an identity, the script signs the bundle ad hoc (`codesign --sign -`),
+which Apple silicon requires of every program, without the hardened runtime,
+which only notarization needs, so no entitlements either. macOS ties
+permissions and Keychain access to the signature, and an ad hoc one changes
+with every build, so each build asks again. To keep them, the script signs
+with "Yapfast Dev" once `scripts/make-macos-signing-identity` has made it, a
+self-signed certificate in a keychain of its own that the script unlocks, or
+with the identity named in `YAPFAST_CODESIGN_IDENTITY`. Neither is notarized,
+so Gatekeeper stops the downloaded app until it's allowed in System Settings ›
+Privacy & Security, or its quarantine is removed (`xattr -dr
+com.apple.quarantine Yapfast.app`). `ditto -c -k --keepParent` zips the bundle
+as Finder would.
 
 Opened from Finder or the Dock, Yapfast's output goes to `/dev/null`, so it
 writes its log to `~/Library/Logs/Yapfast/yapfast.log` instead, where Console

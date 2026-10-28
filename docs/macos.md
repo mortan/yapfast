@@ -103,12 +103,17 @@ anything that needs a permission from a terminal tab outside tmux, or open the
 app. An unbundled binary shows no notifications at all; the framework needs
 a bundle.
 
-macOS ties each permission to the app's signature. `scripts/build-macos` signs
-ad hoc, and an ad hoc signature changes with every build, so each new build
-asks again. To keep the permissions across builds, make a code-signing
-certificate in Keychain Access (Certificate Assistant › Create a
-Certificate…, type Code Signing) and name it in `YAPFAST_CODESIGN_IDENTITY`
-when building. `tccutil reset All io.github.yapfast.Yapfast` forgets every
+macOS ties each permission to the app's signature. Without a signing
+identity, `scripts/build-macos` signs ad hoc, and an ad hoc signature changes
+with every build, so each new build asks again. To keep the permissions
+across builds, run `scripts/make-macos-signing-identity` once: it makes a
+self-signed certificate, "Yapfast Dev", in a keychain of its own
+(`~/Library/Keychains/yapfast-signing.keychain-db`, empty password, not in
+the search list), and from then on the build signs with it. A certificate
+in the login keychain works only from a shell in the login session, such as
+Terminal.app: from tmux or ssh, `codesign` fails with
+`errSecInternalComponent`. Another identity can be named in
+`YAPFAST_CODESIGN_IDENTITY`. `tccutil reset All io.github.yapfast.Yapfast` forgets every
 answer, so macOS asks again.
 
 ## Keychain prompts
