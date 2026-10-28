@@ -20,6 +20,7 @@ scripts/macos-env cargo run --locked -- --preview   # the UI without an account
 scripts/macos-env cargo build --profile fast        # a development build
 scripts/build-macos                                 # target/dist/Yapfast.app, Discord only
 scripts/build-macos full                            # with Matrix
+scripts/build-macos discord --dev                   # the same app, rebuilt in seconds
 open target/dist/Yapfast.app
 ```
 

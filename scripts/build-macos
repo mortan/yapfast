@@ -5,16 +5,27 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # The Discord flavour is the release; full adds Matrix, as a separate preview.
-# Arguments after the flavour go to scripts/package-macos.py.
+# --dev builds the measure profile instead, optimized as release but
+# incremental, so that the app is ready seconds after a small edit: for
+# trying it here, not for release. Later arguments go to
+# scripts/package-macos.py.
 flavour=${1:-discord}
 case $flavour in
   discord) features=(--no-default-features --features desktop,discord) ;;
   full) features=() ;;
-  *) echo "usage: scripts/build-macos [discord|full] [package-macos.py options]" >&2; exit 2 ;;
+  *) echo "usage: scripts/build-macos [discord|full] [--dev] [package-macos.py options]" >&2; exit 2 ;;
 esac
 shift $(($# > 0 ? 1 : 0))
+profile=release
+if [ "${1:-}" = --dev ]; then
+  profile=measure
+  # Its symbols would name the object files' folders here.
+  export CARGO_PROFILE_MEASURE_STRIP=true
+  shift
+fi
 source scripts/macos-env
 source scripts/release-env aarch64-apple-darwin
 # macOS's bash 3.2 calls an empty array unbound under `set -u`.
-cargo build --locked --release --target aarch64-apple-darwin ${features[@]+"${features[@]}"}
-python3 scripts/package-macos.py --flavour "$flavour" "$@"
+cargo build --locked --profile "$profile" --target aarch64-apple-darwin ${features[@]+"${features[@]}"}
+python3 scripts/package-macos.py --flavour "$flavour" \
+  --executable "target/aarch64-apple-darwin/$profile/yapfast" "$@"

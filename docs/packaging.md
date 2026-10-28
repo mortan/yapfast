@@ -87,7 +87,10 @@ the binary names no folder of the machine that built it, and builds with
 `cargo build --release --target aarch64-apple-darwin`. macOS's `strip`
 leaves a proc macro's library unloadable, so the release profile strips only
 what ships, not build scripts and proc macros (`Cargo.toml`). A cold build
-takes about 7 minutes on an M4 Pro; packing takes seconds.
+takes about 7 minutes on an M4 Pro; packing takes seconds. For trying the
+app while working on it, `--dev` after the flavour builds the measure
+profile instead, stripped: optimized as release, but incremental, so the app
+is ready 10–20 s after a small Rust edit. Its ZIP isn't for release.
 
 `scripts/package-macos.py` lays the bundle out as macOS expects it:
 `Contents/Info.plist`, from `packaging/macos/Info.plist` with the version from
