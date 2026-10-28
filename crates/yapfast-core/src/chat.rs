@@ -3940,6 +3940,9 @@ pub async fn run(
     let session = match crate::matrix_chat::open(root, start).await {
         Ok(session) => session,
         Err(error) => {
+            // Parameters drop in reverse order, which would end the events
+            // while commands were still taken; refuse commands first.
+            drop(commands);
             let _ = events.send(Event::Error(error.to_string()));
             return;
         }
