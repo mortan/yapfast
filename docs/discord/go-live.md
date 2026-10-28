@@ -34,7 +34,8 @@ FFmpeg's reading of files people sent out of the window's process. Its
 frames carry their time, which the seek bar shows.
 `stream_worker` starts it with one job as a JSON line and reads its reports
 back. On Linux it starts `/proc/self/exe`, the running Yapfast, since Yapfast's path
-names a deleted file once a rebuild or update replaces it. Frames reach the UI through `frames`, a triple buffer in a memory-mapped
+names a deleted file once a rebuild or update replaces it; elsewhere, the
+running Yapfast's path. Frames reach the UI through `frames`, a triple buffer in a memory-mapped
 file in the runtime directory. The file is unlinked once the worker opens it.
 Windows won't delete a mapped file, so there it's a temporary file that
 Windows deletes once both processes close it.
@@ -42,10 +43,11 @@ On Linux, libwebrtc's capturer asks the screen sharing portal what to share.
 The portal answers over D-Bus through GLib, so the worker runs GLib's main
 context while it waits for the dialog and for frames. Yapfast tells Discord it's
 live only once frames flow, so a cancelled dialog shares nothing. Windows has
-no such dialog, so the share menu lists the screens and windows libwebrtc's
-capturers find (`stream_worker::shareable`), and the worker captures the one
-picked by its id; see the
-[Windows guide](../windows-beta.md#go-live-on-windows).
+no such dialog, nor macOS as Yapfast uses it, so the share menu lists the
+screens and windows libwebrtc's capturers find (`stream_worker::shareable`),
+and the worker captures the one picked by its id; see the
+[Windows guide](../windows-beta.md#go-live-on-windows) and [Go Live on
+macOS](#go-live-on-macos).
 While live, the voice dock's share button switches what's shared without
 ending the stream: the worker starts a second capturer (on Linux, through the
 dialog again) and keeps sending the first one's frames. When the second one
@@ -196,6 +198,42 @@ Yapfast's stream at 1080p with its sound, without the call's.
 The fake server (`testing/fake_discord.ts`) checks what a stream sends, without
 DAVE, and streams its recordings to viewers; its header lists the controls
 that add a viewer or change a stream's codec.
+
+## Go Live on macOS
+
+libwebrtc captures screens through ScreenCaptureKit (`ScreenCapturerSck`,
+which the vendored webrtc-sys allows) and windows through Core Graphics'
+window list and its picture of each window. LiveKit would have a screen
+capturer ask macOS's own picker (`SCContentSharingPicker`), listing a new
+placeholder each time in place of the screens, so Yapfast turns the picker
+off (`capturer_options`) and lists screens by their display ids, like
+Windows. The share menu shows each screen's picture (`Job::Glance`) and each
+window by its title, or its application's name where it has none. Yapfast's
+own windows are left out by owner process id
+(`native/capture_mac.c`), which libwebrtc does only on Windows.
+
+Capture needs the Screen & System Audio Recording permission. macOS gives it
+to the app responsible for the process: the Yapfast app, for its stream
+workers too, since a child process started from the app is the app's; an
+unbundled `yapfast` run from a terminal is the terminal's, and under tmux
+macOS refuses without asking. Without it, macOS lists no screens, lists
+windows without titles, and gives no pictures of them, so a capture would
+wait for ever. So before listing, Yapfast asks Core Graphics
+(`CGPreflightScreenCaptureAccess`); without the permission the share menu
+stays shut, and a notice says to allow Yapfast in System Settings › Privacy
+& Security › Screen & System Audio Recording, then to quit and reopen it,
+which macOS needs before the permission applies. The first time, Yapfast also
+asks for it (`CGRequestScreenCaptureAccess`), and macOS shows its own dialog;
+after that it answers without one. The worker checks again as it starts a
+capture, and ends with the same message, which the voice panel shows.
+
+The shared screen's sound comes through a Core Audio process tap, which
+needs System Audio Recording, part of the same setting; see the sound above.
+The video goes to VideoToolbox's hardware encoder ([On macOS](#on-macos));
+x264 encodes only when "Encode streams with the GPU" is off or VideoToolbox
+fails. x264 is built without its Arm assembly there, and still keeps up to
+1080p60 at either effort; at the screen's own size, 1440p keeps 30 fps, and
+4K only without "Higher quality". Nothing caps it.
 
 ## Choosing the H264 encoder
 

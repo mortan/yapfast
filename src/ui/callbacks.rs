@@ -1847,8 +1847,19 @@ pub(super) fn bind_callbacks(window: &YapfastWindow, adapter: &Rc<RefCell<Adapte
     #[cfg(feature = "discord")]
     let weak = window.as_weak();
     #[cfg(feature = "discord")]
+    let state = adapter.clone();
+    #[cfg(feature = "discord")]
     window.on_list_share_sources(move || {
         use yapfast_core::stream_worker::{Report, Source, Worker};
+        // Without macOS's permission there's nothing to list; the menu
+        // stays shut, and the notice says how to allow it.
+        if let Some(refused) = yapfast_core::stream_worker::capture_refused() {
+            if let Some(window) = weak.upgrade() {
+                state.borrow_mut().app.state.notice = Some(refused.to_owned());
+                window.set_notice(refused.into());
+            }
+            return;
+        }
         // A picture fills a card in the share menu, in pixels.
         let scale = weak
             .upgrade()

@@ -3,7 +3,7 @@
 //! WebRTC headers in the same libwebrtc archive webrtc-sys links, so they
 //! match its code, and the H264 encoder against x264 (vendor/x264-src). On
 //! macOS it also builds the process tap's Objective-C part, for Go Live's
-//! sound.
+//! sound, and what asks macOS about screen capture.
 
 fn main() {
     for file in [
@@ -16,6 +16,7 @@ fn main() {
         "camera.cc",
         "camera_mac.m",
         "tap_mac.m",
+        "capture_mac.c",
         "hwenc.c",
         "hevc.c",
         "vtdec.c",
@@ -122,6 +123,13 @@ fn main() {
             .flag("-fobjc-arc")
             .warnings(true)
             .compile("yapfast_tap");
+        // Screen capture's permission, and Yapfast's own windows, which
+        // the share menu leaves out.
+        cc::Build::new()
+            .file("native/capture_mac.c")
+            .warnings(true)
+            .compile("yapfast_capture");
+        println!("cargo:rustc-link-lib=framework=CoreGraphics");
     }
     if videotoolbox {
         println!("cargo:rustc-cfg=hwenc");

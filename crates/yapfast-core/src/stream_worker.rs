@@ -182,14 +182,15 @@ pub fn shareable() -> Vec<Shareable> {
         // application's window.
         #[cfg(windows)]
         // SAFETY: no arguments; it only reads this process's console.
-        let console = unsafe { windows::Win32::System::Console::GetConsoleWindow() }.0 as u64;
-        #[cfg(not(windows))]
-        let console = 0;
+        let own = [unsafe { windows::Win32::System::Console::GetConsoleWindow() }.0 as u64];
+        // libwebrtc leaves this process's windows out on Windows alone.
+        #[cfg(target_os = "macos")]
+        let own = mac::own_windows();
         let windows = sources(DesktopCaptureSourceType::Window)
             .into_iter()
             .filter_map(|window| {
                 let title = window.title();
-                (!title.trim().is_empty() && window.id() != console).then(|| Shareable {
+                (!title.trim().is_empty() && !own.contains(&window.id())).then(|| Shareable {
                     source: Source::Window(window.id()),
                     title,
                 })
@@ -198,15 +199,87 @@ pub fn shareable() -> Vec<Shareable> {
     }
 }
 
+/// Why screens and windows can't be captured, when they can't: on macOS,
+/// without the Screen Recording permission, which this asks for once in
+/// each process. Elsewhere it's none; Linux's dialog says no itself.
+pub fn capture_refused() -> Option<&'static str> {
+    #[cfg(target_os = "macos")]
+    if !mac::screen_recording_allowed() {
+        static ASKED: std::sync::Once = std::sync::Once::new();
+        // Off the caller's thread, in case macOS waits for its dialog.
+        ASKED.call_once(|| {
+            std::thread::spawn(mac::ask_for_screen_recording);
+        });
+        return Some(
+            "macOS doesn't let Yapfast record the screen. Allow Yapfast in System Settings › \
+             Privacy & Security › Screen & System Audio Recording, then quit and reopen it.",
+        );
+    }
+    None
+}
+
+/// What macOS says about screen capture (`native/capture_mac.c`).
+#[cfg(target_os = "macos")]
+mod mac {
+    unsafe extern "C" {
+        fn yapfast_screen_recording_allowed() -> std::ffi::c_int;
+        fn yapfast_ask_for_screen_recording();
+        fn yapfast_windows_of(pid: std::ffi::c_int, ids: *mut u32, capacity: usize) -> usize;
+    }
+
+    /// Whether macOS lets Yapfast record the screen: the app responsible for
+    /// this process, so the .app for its stream workers too.
+    pub fn screen_recording_allowed() -> bool {
+        // SAFETY: no arguments; it only asks.
+        unsafe { yapfast_screen_recording_allowed() != 0 }
+    }
+
+    /// Asks for the permission; macOS shows its dialog the first time only.
+    pub fn ask_for_screen_recording() {
+        // SAFETY: no arguments.
+        unsafe { yapfast_ask_for_screen_recording() }
+    }
+
+    /// The ids of this process's windows, as libwebrtc lists windows.
+    pub fn own_windows() -> Vec<u64> {
+        let pid = std::process::id() as std::ffi::c_int;
+        let mut ids = vec![0u32; 16];
+        loop {
+            // SAFETY: `ids` holds `ids.len()` ids for it to write.
+            let count = unsafe { yapfast_windows_of(pid, ids.as_mut_ptr(), ids.len()) };
+            if count <= ids.len() {
+                ids.truncate(count);
+                return ids.into_iter().map(u64::from).collect();
+            }
+            ids.resize(count, 0);
+        }
+    }
+}
+
 #[cfg(not(target_os = "linux"))]
 fn sources(
     kind: livekit::webrtc::desktop_capturer::DesktopCaptureSourceType,
 ) -> Vec<livekit::webrtc::desktop_capturer::CaptureSource> {
-    livekit::webrtc::desktop_capturer::DesktopCapturer::new(
-        livekit::webrtc::desktop_capturer::DesktopCapturerOptions::new(kind),
-    )
-    .map(|capturer| capturer.get_source_list())
-    .unwrap_or_default()
+    livekit::webrtc::desktop_capturer::DesktopCapturer::new(capturer_options(kind))
+        .map(|capturer| capturer.get_source_list())
+        .unwrap_or_default()
+}
+
+/// How a capturer of `kind` is made. On macOS, LiveKit would have it ask
+/// the system's picker (`SCContentSharingPicker`) by default, listing one
+/// new placeholder each time in place of the screens; Yapfast lists them
+/// itself, with ScreenCaptureKit capturing the one picked by its display id.
+fn capturer_options(
+    kind: livekit::webrtc::desktop_capturer::DesktopCaptureSourceType,
+) -> livekit::webrtc::desktop_capturer::DesktopCapturerOptions {
+    let options = livekit::webrtc::desktop_capturer::DesktopCapturerOptions::new(kind);
+    #[cfg(target_os = "macos")]
+    let options = {
+        let mut options = options;
+        options.set_sck_system_picker(false);
+        options
+    };
+    options
 }
 
 /// What [`Source::Screen`] shares where Yapfast lists what to share: the pick
@@ -965,7 +1038,8 @@ fn capture_screen(
         frame += 1;
         let seen = capture.seen();
         if let Some(failure) = &seen.failed {
-            bail!(if reported.is_none() {
+            // Before the first picture, on Linux, the dialog didn't pick.
+            bail!(if cfg!(target_os = "linux") && reported.is_none() {
                 "Screen sharing was cancelled, or this desktop has no screen sharing dialog."
                     .to_owned()
             } else {
@@ -1030,7 +1104,7 @@ impl Capture {
         max_height: u32,
     ) -> Result<Self> {
         use livekit::webrtc::desktop_capturer::{
-            CaptureError, DesktopCaptureSourceType, DesktopCapturer, DesktopCapturerOptions,
+            CaptureError, DesktopCaptureSourceType, DesktopCapturer,
         };
         // On Linux the system's screen sharing dialog picks a screen or window.
         #[cfg(target_os = "linux")]
@@ -1040,7 +1114,10 @@ impl Capture {
             Source::Window(_) => DesktopCaptureSourceType::Window,
             _ => DesktopCaptureSourceType::Screen,
         };
-        let mut options = DesktopCapturerOptions::new(kind);
+        if let Some(refused) = capture_refused() {
+            bail!(refused);
+        }
+        let mut options = capturer_options(kind);
         options.set_include_cursor(true);
         let mut capturer = DesktopCapturer::new(options)
             .context("Screen sharing isn't available on this system.")?;
@@ -1166,12 +1243,13 @@ fn glance(
 #[cfg(not(target_os = "linux"))]
 fn glance_at(id: u64, stop: &AtomicBool) -> Result<Option<I420Buffer>> {
     use livekit::webrtc::desktop_capturer::{
-        CaptureError, DesktopCaptureSourceType, DesktopCapturer, DesktopCapturerOptions,
+        CaptureError, DesktopCaptureSourceType, DesktopCapturer,
     };
-    let mut capturer = DesktopCapturer::new(DesktopCapturerOptions::new(
-        DesktopCaptureSourceType::Screen,
-    ))
-    .context("Screen sharing isn't available on this system.")?;
+    if let Some(refused) = capture_refused() {
+        bail!(refused);
+    }
+    let mut capturer = DesktopCapturer::new(capturer_options(DesktopCaptureSourceType::Screen))
+        .context("Screen sharing isn't available on this system.")?;
     let source = capturer
         .get_source_list()
         .into_iter()
