@@ -83,11 +83,12 @@ impl Shell {
     /// Goes to the tray, as starting at sign-in does: the first window, never
     /// shown, goes, and the next opens where a first one would.
     pub(super) fn start_in_tray(self: &Rc<Self>) {
-        // Windows knows at once whether the icon went in. On Linux the bus says
-        // a moment later, and without a tray `chosen` opens the window.
+        // Windows and macOS know at once whether the icon went in. On Linux
+        // the bus says a moment later, and without a tray `chosen` opens the
+        // window.
         let missing = match self.adapter.borrow().tray.as_ref() {
             None => true,
-            Some(tray) => cfg!(windows) && !tray.available(),
+            Some(tray) => cfg!(any(windows, target_os = "macos")) && !tray.available(),
         };
         if missing {
             self.show_first();
@@ -97,6 +98,9 @@ impl Shell {
             self.adapter.borrow_mut().detach();
             drop(window);
         }
+        // Once winit has made Yapfast a regular app, as it finishes launching.
+        #[cfg(target_os = "macos")]
+        slint::Timer::single_shot(Duration::ZERO, || crate::tray::show_in_dock(false));
         tracing::info!("started in the tray");
         slint::Timer::single_shot(Duration::from_millis(500), release_memory);
     }
@@ -185,6 +189,8 @@ impl Shell {
             return;
         }
         self.drop_window();
+        #[cfg(target_os = "macos")]
+        crate::tray::show_in_dock(false);
         // Slint lets go of the window's last pieces as the event loop goes on.
         slint::Timer::single_shot(Duration::from_millis(500), release_memory);
     }
@@ -215,6 +221,8 @@ impl Shell {
 
     /// Brings the window to the front, making it again if it was closed.
     pub(super) fn open(self: &Rc<Self>) -> Option<YapfastWindow> {
+        #[cfg(target_os = "macos")]
+        crate::tray::show_in_dock(true);
         if let Some(window) = self.window() {
             let _ = window.show();
             window.window().set_minimized(false);
@@ -298,7 +306,7 @@ impl Shell {
     }
 
     /// Does what a button in the window would, with the window or without it.
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     fn act(&self, action: Action) {
         let mut adapter = self.adapter.borrow_mut();
         match self.window() {
@@ -350,7 +358,7 @@ pub(super) fn launched(token: Option<String>) {
 }
 
 /// What the person chose in the tray.
-#[cfg(any(target_os = "linux", windows))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn chosen(choice: Choice) {
     let Some(shell) = SHELL.with(|shell| shell.borrow().upgrade()) else {
         return;
@@ -363,6 +371,7 @@ fn chosen(choice: Choice) {
         Choice::Quit => {
             let _ = slint::quit_event_loop();
         }
+        #[cfg(any(target_os = "linux", windows))]
         Choice::Available => {
             let available = shell
                 .adapter
@@ -384,7 +393,7 @@ fn chosen(choice: Choice) {
 }
 
 /// No tray here chooses anything.
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 fn chosen(choice: Choice) {
     match choice {}
 }

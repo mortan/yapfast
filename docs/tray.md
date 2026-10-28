@@ -1,9 +1,10 @@
 # The tray
 
-Closing the window leaves Yapfast running in the system tray: the session, a call, notifications, ringing and sounds go on. The
+Closing the window leaves Yapfast running in the system tray, or on macOS the
+menu bar: the session, a call, notifications, ringing and sounds go on. The
 tray icon is Yapfast's logo in Yap's marigold, with a red dot cut into its
 corner while a mention or a DM waits unread, as Discord counts them. Clicking
-it opens the window. Its menu has Open Yapfast, Disconnect during a call, and
+it opens the window (on macOS, the menu). Its menu has Open Yapfast, Disconnect during a call, and
 Quit.
 
 Settings → Advanced has "Close to tray", on unless turned off
@@ -24,8 +25,8 @@ another `--data-dir` always starts. The preview never asks.
 
 The first start holds a lock on `instance.lock` in the folder, which the
 system lets go of when the process ends, so a crash leaves nothing to clean
-up. It listens on `instance.socket` beside it on Linux; on Windows on a
-named event, `Local\yapfast-` and a hash of the folder's path. A later start
+up. It listens on `instance.socket` beside it on Linux and macOS; on Windows
+on a named event, `Local\yapfast-` and a hash of the folder's path. A later start
 that finds the lock taken asks for the window there, trying for 5 seconds
 while the first may still be starting or restarting with another renderer,
 and starts anyway if nothing answers. On Linux it passes on the activation
@@ -41,21 +42,33 @@ Settings → Advanced → "Start when you sign in" starts Yapfast with
 `--background` when the person signs in to their computer (`src/autostart.rs`).
 The entry is the setting, not `layout.json`: on Windows a value named
 `Yapfast` in `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`, on Linux
-`io.github.yapfast.Yapfast.desktop` in `$XDG_CONFIG_HOME/autostart`. Each
-window reads it, so turning Yapfast off in Task Manager's Startup apps (an odd
-first byte in `Explorer\StartupApproved\Run`), or a desktop setting
-`Hidden=true` or deleting the file, shows as off. Turning it on here clears
-Task Manager's record too. Each start, outside the preview, rewrites an entry
-that's on with this Yapfast's path, so moving its folder or an update keeps it
-working. The entry keeps `--data-dir` if Yapfast had one; an AppImage's entry
-names the AppImage, not its temporary mount. The preview, and platforms
-without either, don't show the switch. The Windows installer's "Start Yapfast
-automatically when Windows starts" writes the same value, and uninstalling removes it.
+`io.github.yapfast.Yapfast.desktop` in `$XDG_CONFIG_HOME/autostart`, on macOS
+the launchd agent `~/Library/LaunchAgents/io.github.yapfast.Yapfast.plist`.
+Each window reads it, so turning Yapfast off in Task Manager's Startup apps
+(an odd first byte in `Explorer\StartupApproved\Run`), or a desktop setting
+`Hidden=true`, a `Disabled` key in the agent, or deleting the file, shows as
+off. Turning it on here clears Task Manager's record too. Each start, outside
+the preview, rewrites an entry that's on with this Yapfast's path, so moving
+its folder or an update keeps it working. The entry keeps `--data-dir` if
+Yapfast had one; an AppImage's entry names the AppImage, not its temporary
+mount. The preview, and platforms without an entry, don't show the switch.
+The Windows installer's "Start Yapfast automatically when Windows starts"
+writes the same value, and uninstalling removes it.
+
+The macOS agent runs the executable itself, `Contents/MacOS/yapfast` inside
+`Yapfast.app` when started from the bundle, with `RunAtLoad`, `ProcessType`
+`Interactive` and `LimitLoadToSessionType` `Aqua`, so launchd starts it once
+as the person signs in to the desktop. Yapfast writes the file and leaves
+loading it to the next sign-in; macOS says "Login item added" as the file
+appears. Turning Yapfast off in System Settings → General → Login Items keeps
+the file and records it in macOS's own list, which Yapfast doesn't read, so
+the switch stays on there.
 
 `--background` restores the saved session and goes to the tray without
 showing the window, or shows it when there's no session to restore, since
 signing in needs it. Windows knows at once whether the icon went into the
-notification area; without it the window shows. On Linux the bus says a
+notification area, and macOS whether the menu bar took it; without it the
+window shows. On Linux the bus says a
 moment later, and a tray that's missing, or goes while the window is closed,
 opens the window. A window made late, from the tray, fails over to Skia
 Software as the first does when the GPU fails.
@@ -139,6 +152,40 @@ The registry side is checked under Wine: `autostart::windows::tests`, ignored
 since it writes the current user's Run key, passes with a throwaway
 `WINEPREFIX`, and the installer installs, updates over Task Manager's "off",
 and uninstalls under `xvfb-run` in one, leaving the data folder.
+
+## macOS
+
+The icon is an `NSStatusItem` in the menu bar, through `objc2-app-kit`, already
+in the tree for arboard and rfd, made and changed on the main thread, which
+runs winit's loop. Its picture is the logo as a template image, 18 points
+square at 1x and 2x from the same SVG, so the menu bar colours it for light
+and dark; the unread dot is cut in as on the other platforms, in the same
+colour. Clicking it shows the menu, as menu-bar icons do: Open Yapfast,
+Disconnect during a call, and Quit, whose items call a small Objective-C
+target object.
+
+While the window shows, Yapfast is a regular app, with a Dock icon and its
+menu bar. Closed to the menu bar, it's an accessory app with neither, so the
+Dock offers no app with nothing to show; opening the window, from the menu,
+a notification or a later start, makes it regular again and brings it
+forward.
+
+winit's application delegate leaves quitting and reopening to AppKit, so
+Yapfast adds two methods to its class as the icon starts.
+`applicationShouldTerminate:` turns Cmd+Q, the app menu's Quit, the Dock's
+Quit and a quit Apple event into Yapfast's own Quit, which writes the layout
+and the window's place and leaves a call, and cancels AppKit's, which would
+`exit` from inside its handler. Only logging out, restarting or shutting down
+(the quit event's `why?` reason) lets AppKit quit at once, so as not to stop
+the logout; the layout was written as it changed.
+`applicationShouldHandleReopen:hasVisibleWindows:` opens the window when the
+app is opened again, from the Dock or by opening `Yapfast.app` in Finder,
+which on macOS reaches the running app rather than starting another.
+
+During a call, or a stream in it, Yapfast holds an `NSProcessInfo` activity
+(`UserInitiated` and `LatencyCritical`, reason "Voice call"), so App Nap
+doesn't slow its 20 ms audio ticks while the window is closed or covered. It
+also keeps the Mac from going to sleep while idle.
 
 ## Testing
 

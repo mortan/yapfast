@@ -1,19 +1,20 @@
 //! Yapfast's icon in the system tray, which keeps Yapfast running with its window
 //! closed: a StatusNotifierItem on Linux, on the session bus Yapfast is given,
-//! and a notification-area icon on Windows. Clicking it opens the window; its
-//! menu opens Yapfast, leaves a call and quits.
+//! a notification-area icon on Windows, and a menu-bar item on macOS. Clicking
+//! it opens the window, or on macOS its menu; the menu opens Yapfast, leaves a
+//! call and quits.
 
 use std::cell::Cell;
 
 /// What the tray asks for, or says. Each runs on Slint's event loop. Only
-/// Linux and Windows have a tray yet.
+/// Linux, Windows and macOS have a tray.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     Open,
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     Disconnect,
-    #[cfg(any(target_os = "linux", windows))]
+    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     Quit,
     /// A tray came or went, which decides what closing the window does.
     #[cfg(any(target_os = "linux", windows))]
@@ -61,7 +62,7 @@ impl Tray {
 
 /// Yapfast's logo in Yap's marigold, `size` pixels square, with a red dot for
 /// unread messages cut into its corner.
-#[cfg(any(target_os = "linux", windows, test))]
+#[cfg(any(target_os = "linux", windows, target_os = "macos", test))]
 fn logo(size: u32, unread: bool) -> Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
     let mut svg = include_str!("../ui/icons/logo.svg")
         .replacen(
@@ -86,7 +87,11 @@ fn logo(size: u32, unread: bool) -> Option<slint::SharedPixelBuffer<slint::Rgba8
 
 #[cfg(target_os = "linux")]
 use linux as platform;
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+use macos as platform;
+#[cfg(target_os = "macos")]
+pub use macos::show_in_dock;
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 use none as platform;
 #[cfg(windows)]
 use windows as platform;
@@ -527,7 +532,323 @@ mod windows {
     }
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::cell::{Cell, RefCell};
+
+    use objc2::{
+        AnyThread, MainThreadMarker, MainThreadOnly, define_class, msg_send,
+        rc::Retained,
+        runtime::{
+            AnyClass, AnyObject, Bool, Imp, NSObject, NSObjectProtocol, ProtocolObject, Sel,
+        },
+        sel,
+    };
+    use objc2_app_kit::{
+        NSApplication, NSApplicationActivationPolicy, NSApplicationTerminateReply,
+        NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage, NSMenu, NSMenuItem,
+        NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
+    };
+    use objc2_foundation::{
+        NSActivityOptions, NSAppleEventDescriptor, NSAppleEventManager, NSProcessInfo, NSSize,
+        NSString, ns_string,
+    };
+
+    use super::{Choice, Shown};
+
+    /// The icon's size in points, as the menu bar's own; drawn at 1x and 2x.
+    const POINTS: u32 = 18;
+
+    thread_local! {
+        /// Where choices go. The menu's target and the methods added to the
+        /// application's delegate find it here, on the main thread.
+        static CHOSEN: Cell<Option<fn(Choice)>> = const { Cell::new(None) };
+    }
+
+    define_class!(
+        /// What the menu's items call.
+        // SAFETY: NSObject has no subclassing requirements, and `Target`
+        // doesn't implement Drop.
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[name = "YapfastMenuTarget"]
+        struct Target;
+
+        impl Target {
+            #[unsafe(method(open:))]
+            fn open(&self, _sender: Option<&AnyObject>) {
+                choose(Choice::Open);
+            }
+
+            #[unsafe(method(disconnect:))]
+            fn disconnect(&self, _sender: Option<&AnyObject>) {
+                choose(Choice::Disconnect);
+            }
+
+            #[unsafe(method(quit:))]
+            fn quit(&self, _sender: Option<&AnyObject>) {
+                choose(Choice::Quit);
+            }
+        }
+
+        unsafe impl NSObjectProtocol for Target {}
+    );
+
+    pub struct Tray {
+        mtm: MainThreadMarker,
+        item: Retained<NSStatusItem>,
+        /// Without the unread dot, and with it.
+        images: [Retained<NSImage>; 2],
+        disconnect: Retained<NSMenuItem>,
+        /// The menu's items hold their target weakly.
+        _target: Retained<Target>,
+        /// Held during a call, so App Nap doesn't slow its 20 ms audio ticks
+        /// while the window is closed.
+        activity: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>>,
+    }
+
+    impl Tray {
+        /// AppKit is only for the main thread, which runs Slint's event loop.
+        pub fn start(chosen: fn(Choice)) -> Option<Self> {
+            let mtm = MainThreadMarker::new()?;
+            let images = [image(false)?, image(true)?];
+            CHOSEN.set(Some(chosen));
+            let target = Target::alloc(mtm).set_ivars(());
+            // SAFETY: NSObject's init, on a freshly allocated object.
+            let target: Retained<Target> = unsafe { msg_send![super(target), init] };
+            let object: &AnyObject = &target;
+            let menu = NSMenu::new(mtm);
+            let add = |title: &str, action: Sel| {
+                // SAFETY: the action is one `Target` has, and the target lives
+                // as long as the tray.
+                let item = unsafe {
+                    let item = NSMenuItem::initWithTitle_action_keyEquivalent(
+                        NSMenuItem::alloc(mtm),
+                        &NSString::from_str(title),
+                        Some(action),
+                        ns_string!(""),
+                    );
+                    item.setTarget(Some(object));
+                    item
+                };
+                menu.addItem(&item);
+                item
+            };
+            add("Open Yapfast", sel!(open:));
+            let disconnect = add("Disconnect", sel!(disconnect:));
+            disconnect.setHidden(true);
+            menu.addItem(&NSMenuItem::separatorItem(mtm));
+            add("Quit", sel!(quit:));
+            let item =
+                NSStatusBar::systemStatusBar().statusItemWithLength(NSSquareStatusItemLength);
+            if let Some(button) = item.button(mtm) {
+                button.setImage(Some(&images[0]));
+                button.setToolTip(Some(ns_string!("Yapfast")));
+            }
+            item.setMenu(Some(&menu));
+            take_quit_and_reopen(mtm);
+            tracing::info!("menu bar icon shown");
+            Some(Self {
+                mtm,
+                item,
+                images,
+                disconnect,
+                _target: target,
+                activity: RefCell::new(None),
+            })
+        }
+
+        pub fn available(&self) -> bool {
+            true
+        }
+
+        pub fn show(&self, shown: Shown) {
+            if let Some(button) = self.item.button(self.mtm) {
+                button.setImage(Some(&self.images[usize::from(shown.unread)]));
+            }
+            self.disconnect.setHidden(!shown.call);
+            let mut activity = self.activity.borrow_mut();
+            match (shown.call, activity.take()) {
+                (true, None) => {
+                    *activity = Some(
+                        NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+                            NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical,
+                            ns_string!("Voice call"),
+                        ),
+                    );
+                    tracing::info!("App Nap held off for the call");
+                }
+                // SAFETY: the activity is the one beginActivity gave.
+                (false, Some(held)) => unsafe { NSProcessInfo::processInfo().endActivity(&held) },
+                (_, held) => *activity = held,
+            }
+        }
+    }
+
+    impl Drop for Tray {
+        fn drop(&mut self) {
+            NSStatusBar::systemStatusBar().removeStatusItem(&self.item);
+            if let Some(held) = self.activity.take() {
+                // SAFETY: the activity is the one beginActivity gave.
+                unsafe { NSProcessInfo::processInfo().endActivity(&held) };
+            }
+            CHOSEN.set(None);
+        }
+    }
+
+    fn choose(choice: Choice) {
+        if let Some(chosen) = CHOSEN.get() {
+            // After AppKit's handler returns, on Slint's event loop.
+            let _ = slint::invoke_from_event_loop(move || chosen(choice));
+        }
+    }
+
+    /// The logo as a template image, which the menu bar colours: only its
+    /// alpha counts, the unread dot included.
+    fn image(unread: bool) -> Option<Retained<NSImage>> {
+        let points = NSSize::new(f64::from(POINTS), f64::from(POINTS));
+        let image = NSImage::initWithSize(NSImage::alloc(), points);
+        for scale in [1, 2] {
+            let size = POINTS * scale;
+            let pixels = super::logo(size, unread)?;
+            // SAFETY: no planes asks the representation to make its own buffer,
+            // of `size` rows of `size` RGBA pixels.
+            let rep = unsafe {
+                NSBitmapImageRep::initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel(
+                    NSBitmapImageRep::alloc(),
+                    std::ptr::null_mut(),
+                    size as isize,
+                    size as isize,
+                    8,
+                    4,
+                    true,
+                    false,
+                    NSDeviceRGBColorSpace,
+                    size as isize * 4,
+                    32,
+                )
+            }?;
+            // SAFETY: the buffer it made, as above.
+            let data = unsafe {
+                std::slice::from_raw_parts_mut(rep.bitmapData(), (size * size * 4) as usize)
+            };
+            // Premultiplied: black at the logo's alpha.
+            for (place, pixel) in data.chunks_exact_mut(4).zip(pixels.as_slice()) {
+                place.copy_from_slice(&[0, 0, 0, pixel.a]);
+            }
+            rep.setSize(points);
+            image.addRepresentation(&rep);
+        }
+        image.setTemplate(true);
+        Some(image)
+    }
+
+    /// Adds to winit's application delegate what it leaves to AppKit: Cmd+Q,
+    /// the app menu's and the Dock's Quit end Yapfast through its own quit,
+    /// which saves the layout, rather than AppKit's `exit`; and opening
+    /// Yapfast again, from the Dock or Finder, opens the window.
+    fn take_quit_and_reopen(mtm: MainThreadMarker) {
+        let app = NSApplication::sharedApplication(mtm);
+        let Some(delegate) = app.delegate() else {
+            tracing::warn!("no application delegate; Cmd+Q quits without saving");
+            return;
+        };
+        let object: &AnyObject = (*delegate).as_ref();
+        let class = std::ptr::from_ref::<AnyClass>(object.class()).cast_mut();
+        // SAFETY: each function has the arguments and result its types say,
+        // and the delegate's class lives as long as the process.
+        let added = unsafe {
+            [
+                objc2::ffi::class_addMethod(
+                    class,
+                    sel!(applicationShouldTerminate:),
+                    std::mem::transmute::<Terminate, Imp>(should_terminate),
+                    c"Q@:@".as_ptr(),
+                ),
+                objc2::ffi::class_addMethod(
+                    class,
+                    sel!(applicationShouldHandleReopen:hasVisibleWindows:),
+                    std::mem::transmute::<Reopen, Imp>(should_reopen),
+                    c"B@:@B".as_ptr(),
+                ),
+            ]
+        };
+        if added.iter().any(|added| !added.as_bool()) {
+            tracing::warn!("winit's application delegate already answers quit or reopen");
+        }
+        // AppKit notes what a delegate answers to as it's given one.
+        app.setDelegate(None);
+        app.setDelegate(Some(&delegate));
+    }
+
+    type Terminate =
+        unsafe extern "C-unwind" fn(&AnyObject, Sel, &AnyObject) -> NSApplicationTerminateReply;
+    type Reopen = unsafe extern "C-unwind" fn(&AnyObject, Sel, &AnyObject, Bool) -> Bool;
+
+    /// Quits through Yapfast's own path, unless the session is ending, where
+    /// cancelling would stop the logout: the layout was written as it changed.
+    unsafe extern "C-unwind" fn should_terminate(
+        _: &AnyObject,
+        _: Sel,
+        _: &AnyObject,
+    ) -> NSApplicationTerminateReply {
+        // Without the icon, Yapfast is already ending.
+        if session_ends() || CHOSEN.get().is_none() {
+            return NSApplicationTerminateReply::TerminateNow;
+        }
+        choose(Choice::Quit);
+        NSApplicationTerminateReply::TerminateCancel
+    }
+
+    unsafe extern "C-unwind" fn should_reopen(
+        _: &AnyObject,
+        _: Sel,
+        _: &AnyObject,
+        _: Bool,
+    ) -> Bool {
+        choose(Choice::Open);
+        Bool::NO
+    }
+
+    /// Whether the quit comes from logging out, restarting or shutting down.
+    fn session_ends() -> bool {
+        let Some(event) = NSAppleEventManager::sharedAppleEventManager().currentAppleEvent() else {
+            return false;
+        };
+        let reason = u32::from_be_bytes(*b"why?");
+        // SAFETY: attributeDescriptorForKeyword: takes an AEKeyword, a u32.
+        let reason: Option<Retained<NSAppleEventDescriptor>> =
+            unsafe { msg_send![&event, attributeDescriptorForKeyword: reason] };
+        reason.is_some_and(|reason| {
+            matches!(
+                &reason.enumCodeValue().to_be_bytes(),
+                b"logo" | b"rlgo" | b"rrst" | b"rsdn" | b"rest" | b"shut"
+            )
+        })
+    }
+
+    /// The Dock icon and the app menu while the window shows; with it closed,
+    /// only the menu bar icon, so the Dock doesn't offer an app with nothing
+    /// to show.
+    pub fn show_in_dock(shown: bool) {
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let app = NSApplication::sharedApplication(mtm);
+        let policy = match shown {
+            true => NSApplicationActivationPolicy::Regular,
+            false => NSApplicationActivationPolicy::Accessory,
+        };
+        if app.activationPolicy() != policy {
+            app.setActivationPolicy(policy);
+        }
+        if shown {
+            app.activate();
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 mod none {
     use super::{Choice, Shown};
 

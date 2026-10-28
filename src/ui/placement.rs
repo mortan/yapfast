@@ -9,9 +9,10 @@ pub(super) struct Placement {
     /// Inside the frame, in physical pixels.
     width: u32,
     height: u32,
-    /// The frame's top left corner on the desktop. Wayland doesn't say, and
-    /// on X11 a monitor gone since could leave it off screen, so only Windows,
-    /// which tells where the monitors are, keeps it from one start to the next.
+    /// The frame's top left corner on the desktop, or on macOS the content's.
+    /// Wayland doesn't say, and on X11 a monitor gone since could leave it off
+    /// screen, so only Windows, which tells where the monitors are, keeps it
+    /// from one start to the next.
     #[cfg_attr(not(windows), serde(skip))]
     position: Option<[i32; 2]>,
     maximized: bool,
@@ -45,8 +46,13 @@ pub(super) fn moved(adapter: &mut Adapter, window: &YapfastWindow) {
         return;
     }
     let size = native.size();
+    // winit on macOS makes a window at a place by its content's corner, not
+    // its frame's, so that's the corner kept there.
     let position = native
-        .with_winit_window(|winit| winit.outer_position().ok())
+        .with_winit_window(|winit| match cfg!(target_os = "macos") {
+            true => winit.inner_position().ok(),
+            false => winit.outer_position().ok(),
+        })
         .flatten()
         .map(|position| [position.x, position.y]);
     let maximized = native.is_maximized();

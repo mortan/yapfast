@@ -1,12 +1,13 @@
 //! Starting Yapfast when the person signs in to their computer: a value in the
-//! registry's Run key on Windows, an XDG autostart entry on Linux. The entry is
-//! the setting, so one turned off in Task Manager, or a deleted file, shows as
-//! off in Settings too. It starts Yapfast with `--background`, in the tray.
+//! registry's Run key on Windows, an XDG autostart entry on Linux, a launchd
+//! agent on macOS. The entry is the setting, so one turned off in Task
+//! Manager, or a deleted file, shows as off in Settings too. It starts Yapfast
+//! with `--background`, in the tray.
 
 use std::path::PathBuf;
 
 /// Whether this platform can start Yapfast at sign-in.
-pub const SUPPORTED: bool = cfg!(any(target_os = "linux", windows));
+pub const SUPPORTED: bool = cfg!(any(target_os = "linux", windows, target_os = "macos"));
 
 /// The name the entry goes by: the Run key's value, and the Inno Setup
 /// installer's, which writes the same one.
@@ -91,7 +92,9 @@ fn windows_argument(argument: &str) -> String {
 
 #[cfg(target_os = "linux")]
 use linux as platform;
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+use macos as platform;
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 use none as platform;
 #[cfg(windows)]
 use windows as platform;
@@ -359,7 +362,162 @@ mod windows {
     }
 }
 
-#[cfg(not(any(target_os = "linux", windows)))]
+#[cfg(target_os = "macos")]
+mod macos {
+    use std::path::{Path, PathBuf};
+
+    pub fn enabled() -> bool {
+        home().is_some_and(|home| agent_enabled(&home))
+    }
+
+    pub fn write(command: &[String]) -> std::io::Result<()> {
+        let home = home().ok_or_else(|| std::io::Error::other("no home folder"))?;
+        write_agent(&home, command)
+    }
+
+    pub fn remove() -> std::io::Result<()> {
+        match home() {
+            Some(home) => match std::fs::remove_file(agent(&home)) {
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                result => result,
+            },
+            None => Ok(()),
+        }
+    }
+
+    fn home() -> Option<PathBuf> {
+        std::env::var_os("HOME")
+            .filter(|home| !home.is_empty())
+            .map(PathBuf::from)
+    }
+
+    fn agent(home: &Path) -> PathBuf {
+        home.join("Library/LaunchAgents")
+            .join(format!("{}.plist", crate::icon::APP_ID))
+    }
+
+    /// The agent is there and not turned off with its `Disabled` key.
+    pub(super) fn agent_enabled(home: &Path) -> bool {
+        std::fs::read_to_string(agent(home)).is_ok_and(|agent| {
+            let agent: String = agent.split_whitespace().collect();
+            !agent.contains("<key>Disabled</key><true/>")
+        })
+    }
+
+    /// launchd starts it as the person signs in, in their graphical session.
+    pub(super) fn plist(command: &[String]) -> String {
+        let arguments: String = command
+            .iter()
+            .map(|argument| format!("\t\t<string>{}</string>\n", escaped(argument)))
+            .collect();
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
+             \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+             <plist version=\"1.0\">\n\
+             <dict>\n\
+             \t<key>Label</key>\n\
+             \t<string>{}</string>\n\
+             \t<key>ProgramArguments</key>\n\
+             \t<array>\n\
+             {arguments}\
+             \t</array>\n\
+             \t<key>RunAtLoad</key>\n\
+             \t<true/>\n\
+             \t<key>ProcessType</key>\n\
+             \t<string>Interactive</string>\n\
+             \t<key>LimitLoadToSessionType</key>\n\
+             \t<string>Aqua</string>\n\
+             </dict>\n\
+             </plist>\n",
+            crate::icon::APP_ID,
+        )
+    }
+
+    fn escaped(text: &str) -> String {
+        text.replace('&', "&amp;")
+            .replace('<', "&lt;")
+            .replace('>', "&gt;")
+    }
+
+    pub(super) fn write_agent(home: &Path, command: &[String]) -> std::io::Result<()> {
+        let path = agent(home);
+        let folder = path.parent().expect("the agent is in a folder");
+        std::fs::create_dir_all(folder)?;
+        // Whole or not at all: launchd may read it at any time.
+        let partial = path.with_extension("plist.partial");
+        std::fs::write(&partial, plist(command))?;
+        std::fs::rename(&partial, &path)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn writes_an_agent_that_starts_in_the_menu_bar() {
+            let home = tempfile::tempdir().unwrap();
+            assert!(!agent_enabled(home.path()));
+            let command = [
+                "/Applications/Yapfast.app/Contents/MacOS/yapfast".to_owned(),
+                "--background".to_owned(),
+                "--data-dir".to_owned(),
+                "/Users/a/Tom & Jerry <data>".to_owned(),
+            ];
+            write_agent(home.path(), &command).unwrap();
+            assert!(agent_enabled(home.path()));
+            let text = std::fs::read_to_string(agent(home.path())).unwrap();
+            assert_eq!(
+                text,
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Label</key>
+	<string>io.github.yapfast.Yapfast</string>
+	<key>ProgramArguments</key>
+	<array>
+		<string>/Applications/Yapfast.app/Contents/MacOS/yapfast</string>
+		<string>--background</string>
+		<string>--data-dir</string>
+		<string>/Users/a/Tom &amp; Jerry &lt;data&gt;</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<key>ProcessType</key>
+	<string>Interactive</string>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+</dict>
+</plist>
+"#
+            );
+            assert!(
+                home.path()
+                    .join("Library/LaunchAgents/io.github.yapfast.Yapfast.plist")
+                    .exists()
+            );
+        }
+
+        #[test]
+        fn an_agent_turned_off_is_off() {
+            let home = tempfile::tempdir().unwrap();
+            write_agent(home.path(), &["yapfast".to_owned()]).unwrap();
+            let path = agent(home.path());
+            let text = std::fs::read_to_string(&path).unwrap();
+            std::fs::write(
+                &path,
+                text.replace("<dict>\n", "<dict>\n\t<key>Disabled</key>\n\t<true/>\n"),
+            )
+            .unwrap();
+            assert!(!agent_enabled(home.path()));
+            std::fs::remove_file(&path).unwrap();
+            assert!(!agent_enabled(home.path()));
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 mod none {
     pub fn enabled() -> bool {
         false

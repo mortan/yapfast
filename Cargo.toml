@@ -17,7 +17,7 @@ default = ["desktop", "matrix", "discord"]
 # Each network is optional, so a build can carry Matrix, Discord or both.
 matrix = ["yapfast-core/matrix"]
 discord = ["yapfast-core/discord", "dep:qrcode"]
-desktop = ["dep:slint", "dep:yapfast-ui", "dep:skia-safe", "dep:rfd", "dep:memmap2", "dep:emojis", "dep:webbrowser", "dep:i-slint-core", "dep:zbus", "dep:arboard", "dep:image", "dep:tempfile", "dep:wl-clipboard-rs", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols", "dep:ksni", "dep:windows-sys", "dep:i-slint-renderer-skia", "dep:futures-util", "dep:x11rb", "dep:xkeysym"]
+desktop = ["dep:slint", "dep:yapfast-ui", "dep:skia-safe", "dep:rfd", "dep:memmap2", "dep:emojis", "dep:webbrowser", "dep:i-slint-core", "dep:zbus", "dep:arboard", "dep:image", "dep:tempfile", "dep:wl-clipboard-rs", "dep:wayland-client", "dep:wayland-backend", "dep:wayland-protocols", "dep:ksni", "dep:windows-sys", "dep:i-slint-renderer-skia", "dep:futures-util", "dep:x11rb", "dep:xkeysym", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
 # The desktop app with a window that reloads ui/ on each save, for UI work;
 # see docs/building.md.
 live-preview = ["desktop", "yapfast-ui/live-preview"]
@@ -82,6 +82,14 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Graphic
 # The GPU setting draws through Direct3D 12 on Windows: NVIDIA's OpenGL driver
 # spins a core while it waits for the screen. See src/graphics.rs.
 i-slint-renderer-skia = { version = "=1.18.1", features = ["wgpu-30"], optional = true }
+
+# The menu-bar icon, the Dock icon only while the window shows, quitting through
+# Yapfast's own path, and keeping App Nap off a call; see src/tray.rs. Already in
+# the tree through arboard and rfd.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.4", optional = true }
+objc2-foundation = { version = "0.3.2", default-features = false, features = ["std", "NSAppleEventDescriptor", "NSAppleEventManager", "NSGeometry", "NSObject", "NSProcessInfo", "NSString"], optional = true }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSApplication", "NSBitmapImageRep", "NSButton", "NSControl", "NSGraphics", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSResponder", "NSStatusBar", "NSStatusBarButton", "NSStatusItem", "NSView"], optional = true }
 
 # A stand-in tray on the private test bus; see testing/tray_host.rs.
 [[example]]
