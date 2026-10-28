@@ -127,7 +127,7 @@ Without an identity, the script signs the bundle ad hoc (`codesign --sign -`),
 which Apple silicon requires of every program, without the hardened runtime,
 which only notarization needs, so no entitlements either. macOS ties
 permissions and Keychain access to the signature, and an ad hoc one changes
-with every build, so each build asks again. To keep them, run
+with every build, so each build asks again. To keep the permissions, run
 `scripts/make-macos-signing-identity` once: it makes "Yapfast Dev", a
 self-signed certificate in a keychain of its own
 (`~/Library/Keychains/yapfast-signing.keychain-db`, empty password, not in
@@ -138,6 +138,8 @@ session, such as Terminal.app: from tmux or ssh, `codesign` fails with
 `YAPFAST_CODESIGN_IDENTITY`. None is notarized, so Gatekeeper stops the
 downloaded app until it's allowed in System Settings › Privacy & Security, or
 its quarantine is removed (`xattr -dr com.apple.quarantine Yapfast.app`).
+The Keychain still asks each new build: [Keychain
+prompts](macos.md#keychain-prompts).
 `ditto` zips the app's folder without the files' extended attributes and
 resource forks: kept, they'd go in as `._` files, which Archive Utility merges
 back but `unzip` writes into the bundle, where they break its signature.

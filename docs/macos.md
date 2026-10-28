@@ -78,8 +78,11 @@ Yapfast does on macOS what it does on Linux, apart from what's
 - **Secrets** (the Discord token, the key of Discord's cache, Matrix
   sessions) go to the login Keychain through the `keyring` crate, under the
   service `io.github.yapfast.Yapfast`; see [Keychain prompts](#keychain-prompts).
-- **Drawing.** Skia Software by default; "Render with the GPU" uses Skia
-  OpenGL ([dependencies](building.md#dependencies)). Text falls back to
+- **Drawing.** Skia Software by default, into IOSurfaces the window shows
+  without a copy, redrawing only what changed
+  ([`vendor/softbuffer`](../vendor/softbuffer/README.yapfast.md)); "Render
+  with the GPU" uses Skia OpenGL ([dependencies](building.md#dependencies)).
+  Text falls back to
   Apple Color Emoji, Helvetica, Apple Symbols and STIX Two Math for what
   Yapfast's typeface lacks, so symbols and the styled letters names use,
   such as 𝓯𝓪𝓷𝓬𝔂, show (`src/emoji.rs`).
@@ -139,8 +142,9 @@ from the OS credential store, on the sign-in screen of a build without
 Matrix rather than offering to link again, and macOS asks again on "Retry
 saved session" or at the next start. Started at sign-in, such a build asks
 before its window shows, and stays in the menu bar only once the token is
-read; after "Deny", the window opens on that message. A stable signing identity, as above,
-stops these prompts too. Against the fake Discord
+read; after "Deny", the window opens on that message. The stable "Yapfast
+Dev" identity doesn't stop these prompts: it has no team ID, so each new
+build asks again, for the login password. Against the fake Discord
 (`YAPFAST_DISCORD_TEST_SERVER`) Yapfast doesn't touch the Keychain.
 
 ## Checks

@@ -227,6 +227,8 @@ dependency in Cargo.toml:
   id changes, and reading a frame's overlong nonce without panicking.
 - `tungstenite`: tungstenite 0.26.2, giving back the read buffer a large frame
   such as Discord's READY grew.
+- `softbuffer`: softbuffer 0.4.8, whose macOS backend has Skia draw into
+  IOSurfaces the window shows without a copy, redrawing only what changed.
 
 `vendor/x264-src` isn't a patched crate but x264's own C source, unchanged and
 trimmed to what an 8-bit encoder library uses, with a build script in place of
