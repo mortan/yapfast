@@ -49,8 +49,8 @@ reads video files, `encode.rs` encodes Go Live and the camera, and
 macOS's camera and Go Live's process tap are Objective-C (`*_mac.m`).
 `audio_io.rs` and `audio_io/` are Yapfast's own sound devices.
 
-`vendor/` holds patched Slint, webrtc-sys, matrix-rtc-livekit, davey and
-tungstenite, plus x264's and FFmpeg's C source; see
+`vendor/` holds patched Slint, webrtc-sys, matrix-rtc-livekit, davey,
+tungstenite and softbuffer, plus x264's and FFmpeg's C source; see
 [dependency sources](building.md#dependency-sources). LiveKit itself comes
 from crates.io, not `vendor/`.
 

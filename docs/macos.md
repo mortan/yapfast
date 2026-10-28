@@ -71,8 +71,10 @@ Yapfast does on macOS what it does on Linux, apart from what's
 - **Secrets** (the Discord token, the key of Discord's cache, Matrix
   sessions) go to the login Keychain through the `keyring` crate, under the
   service `io.github.yapfast.Yapfast`; see [Keychain prompts](#keychain-prompts).
-- **Drawing.** Skia Software by default; "Render with the GPU" uses Skia
-  OpenGL ([dependencies](building.md#dependencies)).
+- **Drawing.** Skia Software by default, into IOSurfaces the window shows
+  without a copy, redrawing only what changed
+  ([`vendor/softbuffer`](../vendor/softbuffer/README.yapfast.md)); "Render
+  with the GPU" uses Skia OpenGL ([dependencies](building.md#dependencies)).
 - **Keys.** Cmd stands in for Ctrl in Yapfast's shortcuts, zoom, copy and
   paste ([chat UI](chat-ui.md#layout-and-look)).
 - **Memory.** Closing the window gives the allocator's free pages back with
@@ -127,8 +129,9 @@ asking. Another build, signed differently, makes macOS ask whether `yapfast`
 may use the item, once per item: so after a rebuild, expect two prompts as a
 linked Discord account starts. "Always Allow" adds that build to the item;
 "Deny" leaves the item as it is: Yapfast says it couldn't read it from the
-OS credential store, and macOS asks again at the next start. A stable
-signing identity, as above, stops these prompts too. Against the fake Discord
+OS credential store, and macOS asks again at the next start. The stable
+"Yapfast Dev" identity doesn't stop these prompts: it has no team ID, so each
+new build asks again, for the login password. Against the fake Discord
 (`YAPFAST_DISCORD_TEST_SERVER`) Yapfast doesn't touch the Keychain.
 
 ## Checks

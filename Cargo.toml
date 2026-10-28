@@ -155,6 +155,7 @@ i-slint-core = { path = "vendor/i-slint-core" }
 i-slint-renderer-skia = { path = "vendor/i-slint-renderer-skia" }
 davey = { path = "vendor/davey" }
 tungstenite = { path = "vendor/tungstenite" }
+softbuffer = { path = "vendor/softbuffer" }
 const_panic = { git = "https://github.com/jplatte/const_panic", rev = "e0b317a9a7bde2d48a7d15b6a60d70e4a41d3b5f" }
 
 [profile.dev]
