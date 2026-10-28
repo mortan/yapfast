@@ -289,8 +289,36 @@ Then [build it yourself](#build-it-yourself).
 
 ### macOS
 
-Not yet, sorry :( I'd love to make one, but I don't own an Apple machine to
-test it on.
+For Macs with Apple silicon, on macOS 14 or newer (sharing other apps' sound
+in Go Live needs 14.4). There's no download yet, so build it yourself for
+now. With Xcode or its command line tools and [Homebrew](https://brew.sh),
+from a clone of this repository:
+
+```sh
+brew install rustup protobuf llvm@21
+scripts/build-macos         # Discord only, like the releases; `full` adds Matrix
+open target/dist/Yapfast.app
+```
+
+The first build takes about 7 minutes on an M4 Pro. Then link your account
+with the QR code, as on Windows. Closing the window leaves Yapfast in the
+menu bar, and **Settings → Advanced** can start it when you sign in.
+
+macOS asks for each permission the first time you use what needs it:
+
+- **Microphone**, for calls.
+- **Camera**, when you turn yours on.
+- **Screen & System Audio Recording**, for Go Live's screens and windows and
+  the sound of other apps. Quit and reopen Yapfast once you've allowed it;
+  macOS wants that.
+- **Input Monitoring**, so push to talk hears the key while another app is in
+  front.
+- **Notifications**, for messages and calls.
+
+Say no to one and only that thing stops working. Your login token goes in the
+Keychain. Each rebuild is signed anew, so macOS asks again for the
+permissions and the Keychain after one; [macOS](docs/macos.md#permissions)
+says how to keep them.
 
 <details>
 <summary><b>Nightly builds</b></summary>
@@ -405,6 +433,10 @@ nix develop path:./nix --command cargo run --locked --no-default-features --feat
 # Windows installer and ZIP, cross-built from Linux, into target/dist
 nix develop path:./nix#windows --command scripts/build-windows
 
+# On a Mac with Apple silicon, scripts/macos-env stands in for the Nix shell
+scripts/macos-env cargo run --locked -- --preview
+scripts/build-macos         # Yapfast.app, into target/dist
+
 # Format, lint and test everything
 scripts/check --fast
 ```
@@ -417,6 +449,7 @@ scripts/check --fast
 | [Discord](docs/discord/README.md) | What's done, what's next, and the fake server the tests use |
 | [Voice](docs/voice.md) | Calls, devices and audio processing |
 | [Windows](docs/windows-beta.md) | Packaging, the installer and Windows checks |
+| [macOS](docs/macos.md) | What works on a Mac, its permissions, and checks there |
 | [Measurements](docs/measurements/README.md) | How memory and CPU are measured |
 
 ## License

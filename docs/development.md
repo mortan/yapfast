@@ -174,6 +174,18 @@ The ZIP and an installer appear in `target/dist/discord` or
 two-machine checks, and [building](building.md#windows) for the options and
 native Windows prerequisites.
 
+## macOS
+
+On a Mac with Apple silicon, `scripts/macos-env` stands in for the Nix shell:
+
+```sh
+scripts/macos-env cargo run --locked -- --preview
+scripts/build-macos         # target/dist/Yapfast.app; `full` adds Matrix
+```
+
+The [macOS guide](macos.md) covers what works there, its permissions, and
+which scripts are Linux-only.
+
 ## Measurements
 
 Memory is a product goal. The [resource measurements](measurements/README.md)

@@ -45,7 +45,8 @@ the conversation view, which `video_player.rs` plays in the stream worker.
 `stream_worker.rs` runs Go Live and video playback in a child process,
 `yapfast --stream-worker`, so their memory goes when they stop. `video.rs`
 reads video files, `encode.rs` encodes Go Live and the camera, and
-`decode.rs` decodes a watched stream, each through C in `native/*.c`.
+`decode.rs` decodes a watched stream, each through C in `native/`, where
+macOS's camera and Go Live's process tap are Objective-C (`*_mac.m`).
 `audio_io.rs` and `audio_io/` are Yapfast's own sound devices.
 
 `vendor/` holds patched Slint, webrtc-sys, matrix-rtc-livekit, davey and
@@ -225,4 +226,5 @@ implement their own drafts, send handling or voice lifecycle.
 
 Library tests keep disposable fixtures under the workspace's
 ignored `.local` directory even though Cargo runs them from the crate directory.
-Windows runtime checks are in the [Windows guide](windows-beta.md).
+Windows runtime checks are in the [Windows guide](windows-beta.md), and
+macOS's in [macOS](macos.md#checks).

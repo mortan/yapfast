@@ -42,7 +42,8 @@ metadata, missing credentials and a missing crypto store stop restoration. They
 never silently create a replacement device or reset its identity.
 
 The OS credential store holds the access token and a randomly generated SDK
-store password. Linux uses Secret Service; Windows uses Credential Manager.
+store password. Linux uses Secret Service; Windows uses Credential Manager;
+macOS uses the login Keychain ([Keychain prompts](macos.md#keychain-prompts)).
 When Secret Service is unavailable at first sign-in, Linux uses private files
 and prints that storage notice. Directory permissions are 0700 and credential
 files are 0600. The root and newly prepared store directories reject broad

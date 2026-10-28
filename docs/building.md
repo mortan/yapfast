@@ -16,7 +16,7 @@ Three Nix shells cover the work:
 On macOS (Apple silicon), `scripts/macos-env` takes the development shell's
 place: run commands as `scripts/macos-env cargo ...`, or `source` it into bash
 or zsh. It needs Xcode's SDK and `brew install rustup protobuf llvm@21`, and
-names whatever is missing. It puts rustup's `cargo` ahead of Homebrew's, so
+names whatever is missing; the fake Discord needs `bun` as well. It puts rustup's `cargo` ahead of Homebrew's, so
 `rust-toolchain.toml` picks Rust, and sets `PROTOC`,
 `MACOSX_DEPLOYMENT_TARGET=14.0` and `YAPFAST_MACOS_ENV=1`. The first run
 downloads LiveKit's libwebrtc and rust-skia's Skia for `aarch64-apple-darwin`
@@ -25,7 +25,8 @@ and renames Skia's JPEG table with `nix/prepare-skia-native.py`, as the Nix
 shell does on Linux; later runs reuse them without the network.
 `scripts/check`, `scripts/test-fake-discord` and `scripts/warm-worktree`
 start through it on macOS, as they start through `nix develop` on Linux;
-`warm-worktree` makes APFS clones there.
+`warm-worktree` makes APFS clones there. What works on a Mac, its
+permissions and the scripts that are Linux-only are in [macOS](macos.md).
 
 The repository's own `flake.nix` builds no shell, only the package that
 `nix profile add github:yapfast/yapfast#yapfast` installs: the Discord-only
@@ -229,8 +230,8 @@ dependency in Cargo.toml:
 `vendor/x264-src` isn't a patched crate but x264's own C source, unchanged and
 trimmed to what an 8-bit encoder library uses, with a build script in place of
 its configure and Makefile. Go Live and the camera encode H264 with it; NASM
-assembles its x86-64 code, so every shell, package and native build needs
-`nasm`.
+assembles its x86-64 code, so every x86-64 shell, package and native build
+needs `nasm`. On Apple silicon it builds as plain C, without `nasm`.
 
 `vendor/ffmpeg-src` is FFmpeg's source trimmed to its hardware encoders
 (NVENC, AMF on Windows, VA-API on Linux) and its HEVC decoder, with
@@ -270,7 +271,8 @@ files named here are in `crates/yapfast-core/native/`.
   RGBA. It also decodes the soundboard's MP3
   and Ogg sounds, which have no pictures. `vp8.c` and `clip.c` encode VP8 and VP9
   with libvpx, `picture.c` scales with libyuv, and `camera.cc` captures
-  through libwebrtc's capture module.
+  through libwebrtc's capture module, or on macOS `camera_mac.m` through
+  AVFoundation.
 - `vendor/ffmpeg-src` holds only the GPU encoders, which `hwenc.c` drives,
   and the HEVC decoder for watched H265 streams, in `hevc.c`, on Linux and
   Windows.
@@ -300,7 +302,8 @@ or Intel's driver.
 
 ## Checks
 
-`scripts/check` enters the development shell itself. `scripts/check --fast`
+`scripts/check` enters the development shell itself, or on macOS
+`scripts/macos-env`, as `scripts/test-fake-discord` does. `scripts/check --fast`
 builds with the `fast` profile, as local work does. It runs, in order:
 formatting; `scripts/check-doc-links`, which fails on a Markdown link to a
 missing file or heading; Clippy with warnings denied and the tests for the whole workspace
@@ -326,7 +329,8 @@ before the first build, copies the main checkout's `target/fast/` and
 `target/check-combinations/` as reflinks, which share disk space with the
 originals, and cleans the crates whose sources are in the repository, so those
 build from the worktree's own files. The first check then takes about 3.5
-minutes. Reflinks need a filesystem such as btrfs.
+minutes. Reflinks need a filesystem such as btrfs; on macOS they're APFS
+clones.
 
 After a change under `vendor/ffmpeg-src` or `vendor/x264-src`, each check
 step compiles it again; Clippy alone takes about 4 minutes. Run Clippy on the
@@ -506,7 +510,8 @@ output.
 After a `measure` build with the release's features (see
 [Networks](#networks)), open `target/measure/yapfast` inside the Nix shell;
 measure `release` only for the shipped build's absolute numbers. Leave it
-inactive for at least 15 seconds, then sample its PID on Linux.
+inactive for at least 15 seconds, then sample its PID on Linux; on macOS,
+see [measuring memory](macos.md#measuring-memory).
 `scripts/ui-session` writes the PID of the Yapfast it runs to
 `.local/ui-session/yapfast.pid`.
 

@@ -97,6 +97,8 @@ Report memory as the table above does: what Windows' Task Manager shows, the
 private working set, and on Linux the app's `RssAnon`, plus `VmSwap` when the
 host swaps. RSS and PSS also count the mapped code and fonts, and they fall
 whenever the kernel reclaims those pages, so they mislead on a busy host.
+On macOS, report the footprint, `footprint -p PID`
+([measuring memory](../macos.md#measuring-memory)).
 
 To compare two builds, use glibc's heap in use, which reclaim doesn't move:
 append `stats` to `.local/ui-session/window-control`, and Yapfast writes
