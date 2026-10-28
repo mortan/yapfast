@@ -301,6 +301,15 @@ an error.
   status is Do Not Disturb. They show while Yapfast
   isn't in front, titled with who wrote where, and clicking one opens the
   conversation. On Linux they go to the freedesktop notification service.
+  On macOS they go to the User Notifications framework, only when Yapfast
+  runs as `Yapfast.app` (an unbundled binary logs that it shows none). The
+  first notification asks permission, for alerts only; until the person
+  answers, later ones wait and then show. Each conversation has one
+  notification, which its newest message replaces, with the author's picture
+  attached and no sound. They show while Yapfast is the active app too, as
+  its window wasn't in front when they were made; clicking one opens the
+  window on the conversation, back in the Dock, even when the click started
+  Yapfast.
   Each also plays Yapfast's message sound, or its mention sound, unless it's in
   the conversation in front; see [voice](../voice.md#sounds).
 - Mentions in messages are links on a light fill, in the role's colour or the

@@ -2137,7 +2137,7 @@ impl Adapter {
                     }
                     if self.layout.notifications.unwrap_or(true) && !FOCUSED.get() {
                         let style = crate::notify::Style {
-                            #[cfg(target_os = "linux")]
+                            #[cfg(any(target_os = "linux", target_os = "macos"))]
                             text: self.layout.notification_text.unwrap_or(true),
                         };
                         self.notifier.show(alert, style);
