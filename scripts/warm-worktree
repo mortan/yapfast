@@ -41,7 +41,20 @@ if [[ $(uname) == Darwin ]]; then
   reflink=(-c) reflink_auto=(-c)
 fi
 
+# Cargo cleans only a target directory that has this tag, and backup tools
+# skip one that has it. Cargo writes it only into a target directory it makes
+# itself, and the main checkout's may lack it, so it's written here as Cargo
+# writes it: into target/, and into each copy's own target directory.
+tag() {
+  [[ -e "$1/CACHEDIR.TAG" ]] && return
+  printf '%s\n' 'Signature: 8a477f597d28d172789f06886806bc55' \
+    '# This file is a cache directory tag created by cargo.' \
+    '# For information about cache directory tags see https://bford.info/cachedir/' \
+    >"$1/CACHEDIR.TAG"
+}
+
 mkdir -p target
+tag target
 for dir in fast check-combinations; do
   if [[ ! -d "$main/target/$dir" ]]; then
     echo "$dir: the main checkout has none"
@@ -65,14 +78,7 @@ for dir in fast check-combinations; do
     echo "scripts/warm-worktree: could not reflink $main/target/$dir" >&2
     exit 1
   fi
-  # Cargo cleans only a target directory that has this tag, which the main
-  # checkout's may lack, so it's written here as Cargo writes it.
-  if [[ ! -e "$partial/CACHEDIR.TAG" ]]; then
-    printf '%s\n' 'Signature: 8a477f597d28d172789f06886806bc55' \
-      '# This file is a cache directory tag created by cargo.' \
-      '# For information about cache directory tags see https://bford.info/cachedir/' \
-      >"$partial/CACHEDIR.TAG"
-  fi
+  tag "$partial"
   cargo clean --profile fast --target-dir "$partial" "${local_crates[@]}"
   mv "$copy" "target/$dir"
   rm -rf "$partial"
