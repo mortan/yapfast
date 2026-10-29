@@ -602,9 +602,31 @@ mod macos {
         disconnect: Retained<NSMenuItem>,
         /// The menu's items hold their target weakly.
         _target: Retained<Target>,
-        /// Held during a call, so App Nap doesn't slow its 20 ms audio ticks
-        /// while the window is closed.
-        activity: RefCell<Option<Retained<ProtocolObject<dyn NSObjectProtocol>>>>,
+        /// Held during a call.
+        activity: RefCell<Option<Activity>>,
+    }
+
+    /// Keeps App Nap from slowing a call's 20 ms audio ticks while the window
+    /// is closed, until dropped.
+    struct Activity(Retained<ProtocolObject<dyn NSObjectProtocol>>);
+
+    impl Activity {
+        fn begin() -> Self {
+            tracing::info!("App Nap held off for the call");
+            Self(
+                NSProcessInfo::processInfo().beginActivityWithOptions_reason(
+                    NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical,
+                    ns_string!("Voice call"),
+                ),
+            )
+        }
+    }
+
+    impl Drop for Activity {
+        fn drop(&mut self) {
+            // SAFETY: the activity is the one beginActivity gave.
+            unsafe { NSProcessInfo::processInfo().endActivity(&self.0) };
+        }
     }
 
     impl Tray {
@@ -668,19 +690,8 @@ mod macos {
             }
             self.disconnect.setHidden(!shown.call);
             let mut activity = self.activity.borrow_mut();
-            match (shown.call, activity.take()) {
-                (true, None) => {
-                    *activity = Some(
-                        NSProcessInfo::processInfo().beginActivityWithOptions_reason(
-                            NSActivityOptions::UserInitiated | NSActivityOptions::LatencyCritical,
-                            ns_string!("Voice call"),
-                        ),
-                    );
-                    tracing::info!("App Nap held off for the call");
-                }
-                // SAFETY: the activity is the one beginActivity gave.
-                (false, Some(held)) => unsafe { NSProcessInfo::processInfo().endActivity(&held) },
-                (_, held) => *activity = held,
+            if shown.call != activity.is_some() {
+                *activity = shown.call.then(Activity::begin);
             }
         }
     }
@@ -688,10 +699,6 @@ mod macos {
     impl Drop for Tray {
         fn drop(&mut self) {
             NSStatusBar::systemStatusBar().removeStatusItem(&self.item);
-            if let Some(held) = self.activity.take() {
-                // SAFETY: the activity is the one beginActivity gave.
-                unsafe { NSProcessInfo::processInfo().endActivity(&held) };
-            }
             CHOSEN.set(None);
         }
     }
