@@ -100,7 +100,8 @@ in its file names, and its `BUILD.json` names the `measure` profile.
 (dotfiles in a watched folder aside), as `scripts/package-windows.py` does.
 It lays the bundle out as macOS expects it: `Contents/Info.plist`, from
 `packaging/macos/Info.plist` with the version from `Cargo.toml` (without a
-nightly's suffix, as the plist's versions are numbers only);
+nightly's suffix, as the plist's versions are numbers only) and
+`MACOSX_DEPLOYMENT_TARGET` as the oldest macOS it runs on;
 `Contents/MacOS/yapfast`; and `Contents/Resources` with the icon, the
 license, `SOURCE.txt`, `BUILD.json`, `THIRD-PARTY.json` and the
 dependencies' licenses and notices, through `scripts/release_package.py` as
@@ -109,7 +110,12 @@ license, so the notices of the code linked into it, expat, libjpeg-turbo,
 libpng, Wuffs and zlib, come from their source at the revisions
 `nix/flake.nix` pins: the script downloads them once into
 `~/Library/Caches/yapfast-build`, checks each against the flake's hash and
-keeps only the license files.
+keeps only the license files. `BUILD.json` records the profile, the
+renderers, the prebuilt Skia archive and the Skia source it's built from,
+libwebrtc's tag and hash as `scripts/macos-env` pins them, and the
+signature. Beside the app, the ZIP holds a `README.txt`: the first steps,
+getting past Gatekeeper among them, the permissions, the log's folder, the
+Keychain and `--renderer`.
 
 The Info.plist names the app `io.github.yapfast.Yapfast`, the Linux app ID,
 and carries the sentences macOS shows when Yapfast first asks for the
@@ -128,8 +134,8 @@ self-signed certificate in a keychain of its own that the script unlocks, or
 with the identity named in `YAPFAST_CODESIGN_IDENTITY`. Neither is notarized,
 so Gatekeeper stops the downloaded app until it's allowed in System Settings ›
 Privacy & Security, or its quarantine is removed (`xattr -dr
-com.apple.quarantine Yapfast.app`). `ditto -c -k --keepParent` zips the bundle
-as Finder would.
+com.apple.quarantine Yapfast.app`). `ditto -c -k --keepParent` zips the app's
+folder as Finder would.
 
 Opened from Finder or the Dock, Yapfast's output goes to `/dev/null`, so it
 writes its log to `~/Library/Logs/Yapfast/yapfast.log` instead, where Console

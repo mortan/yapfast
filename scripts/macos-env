@@ -47,14 +47,16 @@ _yapfast_macos_env() {
 
   # LiveKit's libwebrtc, the tag webrtc-sys-build pins, as nix/native.nix
   # gives it for Linux: the unpacked release folder. It's moved into place
-  # whole, so its presence means it's complete.
-  local webrtc="$cache/webrtc-51ef663"
+  # whole, so its presence means it's complete. scripts/package-macos.py
+  # reads the tag and hash from these two lines for BUILD.json.
+  local webrtc_tag=webrtc-51ef663
+  local webrtc_sha256=f9be49b9fee9cd1588da8a40c85bda21f5ea49c4ed82662dc889b1c919569a08
+  local webrtc="$cache/$webrtc_tag"
   if [ ! -d "$webrtc/mac-arm64-release" ]; then
     mkdir -p "$webrtc" || return 1
     _yapfast_fetch \
-      https://github.com/livekit/rust-sdks/releases/download/webrtc-51ef663/webrtc-mac-arm64-release.zip \
-      "$webrtc/webrtc-mac-arm64-release.zip" \
-      f9be49b9fee9cd1588da8a40c85bda21f5ea49c4ed82662dc889b1c919569a08 || return 1
+      "https://github.com/livekit/rust-sdks/releases/download/$webrtc_tag/webrtc-mac-arm64-release.zip" \
+      "$webrtc/webrtc-mac-arm64-release.zip" "$webrtc_sha256" || return 1
     local unpacked
     unpacked=$(mktemp -d "$webrtc/unpack.XXXXXX") || return 1
     if ! unzip -q "$webrtc/webrtc-mac-arm64-release.zip" -d "$unpacked" ||
@@ -91,7 +93,9 @@ _yapfast_macos_env() {
 
   export PROTOC
   PROTOC=$(command -v protoc)
-  # ScreenCaptureKit, UNUserNotificationCenter and SMAppService.
+  # ScreenCaptureKit, the User Notifications framework and AVFoundation's
+  # external and Continuity cameras. scripts/package-macos.py makes it the
+  # app's LSMinimumSystemVersion.
   export MACOSX_DEPLOYMENT_TARGET=14.0
   # What scripts test in place of IN_NIX_SHELL.
   export YAPFAST_MACOS_ENV=1

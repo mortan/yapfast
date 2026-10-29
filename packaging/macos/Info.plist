@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!-- Yapfast.app's Info.plist. scripts/package-macos.py fills in @VERSION@,
-     the version from Cargo.toml without a nightly's suffix. -->
+     the version from Cargo.toml without a nightly's suffix, and
+     @MINIMUM_SYSTEM@, scripts/macos-env's MACOSX_DEPLOYMENT_TARGET. -->
 <plist version="1.0">
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
@@ -27,7 +28,7 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.social-networking</string>
 	<key>LSMinimumSystemVersion</key>
-	<string>14.0</string>
+	<string>@MINIMUM_SYSTEM@</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMicrophoneUsageDescription</key>

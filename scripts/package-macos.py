@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Package the macOS executable as Yapfast.app, with its icon, Info.plist and
-the dependencies' licenses and notices, signed, and zipped for the release
-beside the source snapshot.
+the dependencies' licenses and notices, signed, and zipped with a README for
+the release beside the source snapshot.
 
 scripts/build-macos runs it in scripts/macos-env, after the build."""
 import argparse
@@ -18,8 +18,8 @@ import tarfile
 import tempfile
 
 from release_package import (FLAVOURS, ROOT, SKIA_VERSION, UI_FRAMEWORK, build_hashes, build_identity, cargo_metadata,
-                             check_executable, dependency_notices, digest, license_file, local_skia_archive,
-                             source_notice, source_snapshot)
+                             check_executable, dependency_notices, digest, first_steps, license_file,
+                             local_skia_archive, source_notice, source_snapshot)
 
 TARGET = "aarch64-apple-darwin"
 CACHE = Path.home() / "Library/Caches/yapfast-build"
@@ -28,7 +28,6 @@ SIGNING_KEYCHAIN = Path.home() / "Library/Keychains/yapfast-signing.keychain-db"
 # The third-party code in rust-skia's prebuilt macOS Skia, as its archive's
 # object files name it; nix/flake.nix pins each one's source.
 SKIA_DEPENDENCIES = ("expat", "libjpeg-turbo", "libpng", "wuffs", "zlib")
-WEBRTC_ARCHIVE_SHA256 = "f9be49b9fee9cd1588da8a40c85bda21f5ea49c4ed82662dc889b1c919569a08"
 
 
 def nar_hash(path):
@@ -78,7 +77,8 @@ def skia_source():
     """Skia's source with the third-party code the macOS archive holds, the
     revisions nix/flake.nix pins, for their notices: the prebuilt archive
     carries only Skia's own license. Downloaded once into CACHE, where only the
-    notices stay; its presence means it's complete."""
+    notices stay; its presence means it's complete. Returns it with the URL
+    and SHA-256 of Skia's own archive."""
     flake = (ROOT / "nix/flake.nix").read_text()
     skia = re.search(r'windowsSkiaSourceArchive = pkgs\.fetchurl \{\s*url = "([^"]+)";\s*sha256 = "([0-9a-f]{64})";',
                      flake)
@@ -89,7 +89,7 @@ def skia_source():
     url, sha256 = skia.groups()
     source = CACHE / f"skia-source-{url.rsplit('/', 1)[1][:8]}"
     if source.is_dir():
-        return source
+        return source, url, sha256
     CACHE.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="skia-source.", dir=CACHE) as temporary:
         temporary = Path(temporary)
@@ -122,7 +122,53 @@ def skia_source():
             elif path.is_dir() and not any(path.iterdir()):
                 path.rmdir()
         tree.rename(source)
-    return source
+    return source, url, sha256
+
+
+def webrtc_pin():
+    """The libwebrtc release tag and archive SHA-256 scripts/macos-env pins."""
+    script = (ROOT / "scripts/macos-env").read_text()
+    tag = re.search(r"^ *local webrtc_tag=(webrtc-[0-9a-f]+)$", script, re.MULTILINE)
+    sha256 = re.search(r"^ *local webrtc_sha256=([0-9a-f]{64})$", script, re.MULTILINE)
+    if not tag or not sha256:
+        raise SystemExit("scripts/macos-env no longer pins libwebrtc as scripts/package-macos.py reads it")
+    return tag[1], sha256[1]
+
+
+def readme(flavour, minimum_system):
+    """README.txt, beside the app in its ZIP."""
+    steps, secrets = first_steps(flavour)
+    edition = " (full preview)" if flavour == "full" else ""
+    return (
+        f"Yapfast{edition} for Macs with Apple silicon, macOS {minimum_system.removesuffix('.0')} or later\n\n"
+        "1. Move Yapfast.app to Applications.\n"
+        "2. Open it. It isn't notarized, so macOS stops it the first time: choose\n"
+        "   Open Anyway in System Settings > Privacy & Security, or run\n"
+        "   xattr -dr com.apple.quarantine /Applications/Yapfast.app in Terminal.\n"
+        + steps + "\n"
+        "macOS asks for the microphone, the camera, screen and system audio\n"
+        "recording, input monitoring and notifications the first time Yapfast\n"
+        "needs each; saying no stops only what needs it. Closing the window\n"
+        "leaves Yapfast in the menu bar.\n"
+        "Opened from Finder or the Dock, Yapfast writes diagnostics to\n"
+        "~/Library/Logs/Yapfast, which Console shows. macOS stores session secrets\n"
+        "in the login Keychain, and app data in\n"
+        "~/Library/Application Support/io.github.yapfast.Yapfast. A new build may\n"
+        "ask whether yapfast may use its Keychain items: choose Always Allow.\n\n"
+        "Voice: select a voice channel and Join voice; the gear chooses devices.\n"
+        "Use headphones for the first two-machine audio test.\n"
+        "If anything fails, record the error text, macOS version, Mac model and\n"
+        f"audio device model. Never send your {secrets} in logs.\n\n"
+        "Yapfast draws with software rendering. Render with the GPU, in Settings >\n"
+        "Advanced, switches to OpenGL from the next start; Yapfast goes back to\n"
+        "software rendering if the GPU cannot start. To choose for one start, run\n"
+        "/Applications/Yapfast.app/Contents/MacOS/yapfast --renderer software\n"
+        "(or --renderer gpu) in Terminal.\n\n"
+        "Yapfast is free software under the GNU General Public License, version 3\n"
+        "or later, in Yapfast.app/Contents/Resources/LICENSE. Dependency notices\n"
+        "and original licenses are beside it; SOURCE.txt there says where this\n"
+        "build's source code is published.\n"
+    )
 
 
 def sign(app, identity):
@@ -157,7 +203,11 @@ def main():
         raise SystemExit(f"Expected an arm64 executable, not {' '.join(archs)}")
     metadata, version = cargo_metadata(TARGET, flavour["features"])
     skia_archive = local_skia_archive(os.environ["SKIA_BINARIES_URL"])
-    skia = skia_source()
+    # nix/prepare-skia-native.py's record of the prebuilt archive it prepared.
+    skia_binaries = json.loads((skia_archive.parent / "yapfast-skia-native.json").read_text())
+    skia, skia_source_url, skia_source_sha256 = skia_source()
+    webrtc_tag, webrtc_sha256 = webrtc_pin()
+    minimum_system = os.environ["MACOSX_DEPLOYMENT_TARGET"]
     identity = os.environ.get("YAPFAST_CODESIGN_IDENTITY") or ("Yapfast Dev" if SIGNING_KEYCHAIN.exists() else "-")
 
     # A dev package, from an incremental build, gets a name and folder of its
@@ -173,13 +223,16 @@ def main():
         temporary = Path(temporary)
         rtc = source_snapshot(metadata, base, temporary, source_path)
 
-        app = temporary / "Yapfast.app"
+        # The ZIP's folder: the app, and README.txt beside it.
+        package = temporary / f"{base}-macos-arm64"
+        app = package / "Yapfast.app"
         (app / "Contents/MacOS").mkdir(parents=True)
         resources = app / "Contents/Resources"
         resources.mkdir()
         # Info.plist's versions take only numbers, without a nightly's suffix.
         info = (ROOT / "packaging/macos/Info.plist").read_text(encoding="utf-8")
-        (app / "Contents/Info.plist").write_text(info.replace("@VERSION@", version.split("-")[0]), encoding="utf-8")
+        info = info.replace("@VERSION@", version.split("-")[0]).replace("@MINIMUM_SYSTEM@", minimum_system)
+        (app / "Contents/Info.plist").write_text(info, encoding="utf-8")
         shutil.copy2(executable, app / "Contents/MacOS/yapfast")
         shutil.copy2(ROOT / "packaging/macos/yapfast.icns", resources / "yapfast.icns")
         shutil.copy2(ROOT / "LICENSE", resources / "LICENSE")
@@ -193,23 +246,31 @@ def main():
             "cargo_profile": args.profile,
             "rustc": subprocess.check_output(["rustc", "--version"], text=True, timeout=10).strip(),
             "macos_sdk": subprocess.check_output(["xcrun", "--show-sdk-version"], text=True, timeout=10).strip(),
-            "macos_deployment_target": os.environ["MACOSX_DEPLOYMENT_TARGET"],
+            "macos_deployment_target": minimum_system,
             "ui_framework": UI_FRAMEWORK,
+            "renderer_default": "skia-software",
+            "renderer_gpu": "skia-opengl, falling back to skia-software",
             "skia_version": SKIA_VERSION,
+            "skia_source_revision": skia_source_url.rsplit("/", 1)[1],
+            "skia_source_archive_sha256": skia_source_sha256,
+            "skia_binaries": skia_binaries["key"],
+            "skia_archive_sha256": skia_binaries["upstream_sha256"],
             **build_hashes(skia_archive, executable, source_path),
-            "webrtc_tag": "webrtc-51ef663",
-            "webrtc_archive_sha256": WEBRTC_ARCHIVE_SHA256,
+            "webrtc_tag": webrtc_tag,
+            "webrtc_archive_sha256": webrtc_sha256,
             "signature": "ad hoc" if identity == "-" else identity,
         }
         if rtc:
             build["homeserver_default"] = "https://matrix.org"
         (resources / "BUILD.json").write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")
+        (package / "README.txt").write_text(readme(args.flavour, minimum_system), encoding="utf-8")
+        sign(app, identity)
+        archive_path.unlink(missing_ok=True)
+        subprocess.run(["ditto", "-c", "-k", "--keepParent", str(package), str(archive_path)], check=True,
+                       timeout=600)
         if app_path.exists():
             shutil.rmtree(app_path)
         shutil.move(app, app_path)
-    sign(app_path, identity)
-    archive_path.unlink(missing_ok=True)
-    subprocess.run(["ditto", "-c", "-k", "--keepParent", str(app_path), str(archive_path)], check=True, timeout=600)
     hashes = releases / "SHA256SUMS.txt"
     hashes.write_text("".join(f"{digest(path)}  {path.name}\n" for path in (archive_path, source_path)),
                       encoding="utf-8")
