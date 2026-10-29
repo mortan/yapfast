@@ -421,6 +421,7 @@ struct MeterShared {
     open: AtomicBool,
     stop: AtomicBool,
     failed: AtomicBool,
+    denied: AtomicBool,
 }
 
 impl GateMeter {
@@ -432,6 +433,7 @@ impl GateMeter {
             open: AtomicBool::new(false),
             stop: AtomicBool::new(false),
             failed: AtomicBool::new(!AVAILABLE),
+            denied: AtomicBool::new(false),
         });
         let microphone = microphone.map(str::to_owned);
         let worker = shared.clone();
@@ -462,6 +464,11 @@ impl GateMeter {
     /// The microphone could not be opened or stopped delivering sound.
     pub fn failed(&self) -> bool {
         self.shared.failed.load(Ordering::Relaxed)
+    }
+
+    /// The system refuses Yapfast the microphone, which hears silence.
+    pub fn denied(&self) -> bool {
+        self.shared.denied.load(Ordering::Relaxed)
     }
 }
 
@@ -681,7 +688,14 @@ fn measure(microphone: Option<&str>, shared: &MeterShared) -> Result<()> {
     let mut processing = Processing::new(None);
     let mut block = [0i16; BLOCK];
     let mut shown = f32::NEG_INFINITY;
+    let mut blocks = 0usize;
     while !shared.stop.load(Ordering::Relaxed) {
+        // About once a second, as the person may answer while it runs.
+        if blocks.is_multiple_of(100) {
+            let denied = crate::audio_io::microphone_denied();
+            shared.denied.store(denied, Ordering::Relaxed);
+        }
+        blocks = blocks.wrapping_add(1);
         stream.read(&mut block);
         processing.block(&mut block);
         shown = processing.level.max(shown - 0.9);

@@ -2502,6 +2502,8 @@ pub(super) fn bind_callbacks(window: &YapfastWindow, adapter: &Rc<RefCell<Adapte
                 window.set_gate_meter_note(SharedString::from(
                     if !yapfast_core::discord_audio::AVAILABLE {
                         "Discord voice and its level aren't available on this system yet."
+                    } else if meter.denied() {
+                        "macOS doesn't let Yapfast use the microphone. Allow it in System Settings › Privacy & Security › Microphone."
                     } else if meter.failed() {
                         "Yapfast can't read this microphone. Check that it's connected, or choose another."
                     } else {
