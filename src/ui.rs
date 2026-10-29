@@ -288,6 +288,23 @@ const ZOOM_NOTE: Duration = Duration::from_millis(1200);
 /// with Ctrl (Cmd on macOS) and +, - and 0 or the scroll wheel, or a pinch,
 /// keeping the level in the layout, and takes files dropped on it. On macOS
 /// it takes Cmd+W, Cmd+M and Control-click too; see [`mac_window`].
+/// Ends recording the push-to-talk key, making `key` it, if there's one,
+/// once the event that recorded it is done.
+fn record_talk_key(
+    window: &YapfastWindow,
+    adapter: &std::rc::Weak<RefCell<Adapter>>,
+    key: Option<crate::push_to_talk::Keybind>,
+) {
+    window.set_talk_recording(false);
+    let Some(key) = key else { return };
+    let (adapter, weak) = (adapter.clone(), window.as_weak());
+    slint::Timer::single_shot(Duration::ZERO, move || {
+        if let (Some(adapter), Some(window)) = (adapter.upgrade(), weak.upgrade()) {
+            adapter.borrow_mut().set_talk_key(&window, key);
+        }
+    });
+}
+
 fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
     use slint::winit_030::{
         EventResult,
@@ -309,16 +326,9 @@ fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
     {
         let (adapter, weak) = (adapter.clone(), window.as_weak());
         crate::push_to_talk::watch_flag_keys(move |key| {
-            let Some(window) = weak.upgrade().filter(|window| window.get_talk_recording()) else {
-                return;
-            };
-            window.set_talk_recording(false);
-            let (adapter, weak) = (adapter.clone(), weak.clone());
-            slint::Timer::single_shot(Duration::ZERO, move || {
-                if let (Some(adapter), Some(window)) = (adapter.upgrade(), weak.upgrade()) {
-                    adapter.borrow_mut().set_talk_key(&window, key);
-                }
-            });
+            if let Some(window) = weak.upgrade().filter(|window| window.get_talk_recording()) {
+                record_talk_key(&window, &adapter, Some(key));
+            }
         });
     }
     // The winit window exists once the event loop runs.
@@ -487,20 +497,10 @@ fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
                     && window.get_talk_recording()
                 {
                     if !key.repeat {
-                        window.set_talk_recording(false);
                         let recorded = (key.logical_key != Key::Named(NamedKey::Escape))
                             .then(|| crate::push_to_talk::Keybind::recorded(key))
                             .flatten();
-                        if let Some(recorded) = recorded {
-                            let (adapter, weak) = (adapter.clone(), weak.clone());
-                            slint::Timer::single_shot(Duration::ZERO, move || {
-                                if let (Some(adapter), Some(window)) =
-                                    (adapter.upgrade(), weak.upgrade())
-                                {
-                                    adapter.borrow_mut().set_talk_key(&window, recorded);
-                                }
-                            });
-                        }
+                        record_talk_key(&window, &adapter, recorded);
                     }
                     return EventResult::PreventDefault;
                 }
