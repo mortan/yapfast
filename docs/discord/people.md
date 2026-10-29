@@ -455,8 +455,9 @@ blocking task lists this user's processes with
 time and user, and the command line only for Wine processes and the few
 rules that need arguments. It never reads CPU, memory, environments or
 threads, and drops the process list after each scan. A process seen before and unchanged
-isn't matched again. Wine and Proton processes match by the Windows program
-in their command line, and runtime helpers, crash reporters and anti-cheat
+isn't matched again. Wine and Proton processes, and on macOS CrossOver's,
+Whisky's and the Game Porting Toolkit's, match by the Windows program in
+their command line, and runtime helpers, crash reporters and anti-cheat
 services don't count. On macOS an app matches by its bundle too, the
 `Game.app` around `Game.app/Contents/MacOS/Game`. The game started last
 shows and stays while it runs. One that ended clears after two scans
@@ -473,11 +474,13 @@ rescans at once.
 
 Discord's list comes from
 `https://cdn.discordapp.com/detectables/games-v1.json`, about 4 MB, as
-Discord's desktop client fetches it. Yapfast keeps this platform's executables
-and the Steam ids in `discord-games.json` beside the account cache, which
-accounts share, and the CDN's ETag in `discord-games.etag`. It asks again a day
-later with the ETag, so an unchanged list costs a 304; a failed download keeps
-the old list and tries again an hour later. Memory holds only a hash of each
+Discord's desktop client fetches it. Yapfast keeps this platform's
+executables (on Linux and macOS, Windows' too, for Wine) and the Steam ids in
+`discord-games.json` beside the account cache, which accounts share, and the
+CDN's ETag in `discord-games.etag`, after a line with the version of what
+Yapfast keeps: a list an earlier version kept is downloaded again at once. It
+asks again a day later with the ETag, so an unchanged list costs a 304; a
+failed download keeps the old list and tries again an hour later. Memory holds only a hash of each
 executable's file name. A process whose name has one has the file read again
 for that name's rules, once per scan for all such processes, and the rules are
 kept for the next scans.

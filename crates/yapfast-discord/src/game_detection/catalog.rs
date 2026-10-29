@@ -109,6 +109,11 @@ pub(super) struct Catalog {
     kept: RefCell<HashMap<u64, Box<[Rule]>>>,
 }
 
+/// Whether Windows games run here through Wine, which they match as on
+/// Windows: on Linux, and on macOS under CrossOver, Whisky or the Game
+/// Porting Toolkit.
+pub(super) const WINE: bool = cfg!(any(target_os = "linux", target_os = "macos"));
+
 pub(super) fn host_os() -> &'static str {
     if cfg!(target_os = "windows") {
         "win32"
@@ -143,7 +148,7 @@ fn read_games(reader: impl Read, visit: impl FnMut(Game) -> Result<()>) -> Resul
                 game.executables.retain(|exe| {
                     !exe.is_launcher
                         && !exe.name.is_empty()
-                        && (exe.os == host_os() || (cfg!(target_os = "linux") && exe.os == "win32"))
+                        && (exe.os == host_os() || (WINE && exe.os == "win32"))
                 });
                 game.third_party_skus
                     .retain(|sku| sku.distributor == "steam" && sku.id.is_some());
@@ -416,8 +421,19 @@ fn arguments_match(args: &[std::ffi::OsString], expected: &str) -> bool {
     command.contains(expected)
 }
 
-/// How long ago the list at `path` was fetched, or found unchanged.
+/// The first line of the file the CDN's version is kept in. A list kept
+/// without it, by an earlier Yapfast, may hold other platforms' rules than
+/// this one keeps (macOS kept no Windows rules before Wine), so it's
+/// downloaded again at once.
+const VERSION: &str = "2\n";
+
+/// How long ago the list at `path` was fetched, or found unchanged; none
+/// for a list an earlier Yapfast kept.
 pub(super) fn age(path: &Path) -> Option<Duration> {
+    let version = std::fs::read_to_string(etag_file(path)).ok()?;
+    if !version.starts_with(VERSION) {
+        return None;
+    }
     let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
     SystemTime::now().duration_since(modified).ok()
 }
@@ -454,7 +470,8 @@ pub(super) async fn refresh(
             .as_deref()
             .filter(|_| revalidate)
             .and_then(|cache| std::fs::read_to_string(etag_file(cache)).ok())
-            .filter(|etag| etag.len() <= 256);
+            .and_then(|etag| Some(etag.strip_prefix(VERSION)?.to_owned()))
+            .filter(|etag| !etag.is_empty() && etag.len() <= 256);
         Ok((temp, cache, etag))
     })
     .await??;
@@ -478,18 +495,8 @@ pub(super) async fn refresh(
             GameList::Written(etag) => {
                 let catalog = compact(temp.path(), cache.as_deref())?;
                 if let Some(cache) = &cache {
-                    let file = etag_file(cache);
-                    let kept = match etag {
-                        Some(etag) => std::fs::write(file, etag),
-                        None => std::fs::remove_file(file).or_else(|error| {
-                            if error.kind() == std::io::ErrorKind::NotFound {
-                                Ok(())
-                            } else {
-                                Err(error)
-                            }
-                        }),
-                    };
-                    if let Err(error) = kept {
+                    let version = format!("{VERSION}{}", etag.unwrap_or_default());
+                    if let Err(error) = std::fs::write(etag_file(cache), version) {
                         tracing::debug!(%error, "could not keep the game list's version");
                     }
                 }
@@ -629,11 +636,11 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn keeps_only_name_hashes_and_reads_rules_once_per_name() {
         let (_file, catalog) = catalog(json!([
-            {"id":"42","name":"Game","executables":[{"os":"win32","name":"game.exe"},{"os":"linux","name":"game"}]},
-            {"id":"43","name":"Other","executables":[{"os":"linux","name":"other"}]}
+            {"id":"42","name":"Game","executables":[{"os":"win32","name":"game.exe"},{"os":host_os(),"name":"game"}]},
+            {"id":"43","name":"Other","executables":[{"os":host_os(),"name":"other"}]}
         ]));
         assert!(
             catalog.kept.borrow().is_empty(),
@@ -648,13 +655,13 @@ mod tests {
         assert_eq!(catalog.kept.borrow().len(), 3);
     }
 
-    // Linux keeps Windows rules too, for Wine.
+    // Linux and macOS keep Windows rules too, for Wine.
     #[test]
-    #[cfg(target_os = "linux")]
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
     fn matches_paths_on_component_boundaries_and_windows_case() {
         let (_file, catalog) = catalog(json!([{"id":"42","name":"Game","executables":[
             {"os":"win32","name":"Game/Game.EXE"},
-            {"os":"linux","name":"game"}]}]));
+            {"os":host_os(),"name":"game"}]}]));
         assert!(
             catalog
                 .matches("C:\\Games\\GAME\\game.exe", &[], true)

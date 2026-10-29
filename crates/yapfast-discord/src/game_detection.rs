@@ -265,8 +265,12 @@ fn fingerprint(process: &sysinfo::Process) -> u64 {
     hash.finish()
 }
 
+/// Whether a process is Wine's, running the Windows program its command
+/// line names. On macOS its executable is Wine's own, such as CrossOver's
+/// `wine64-preloader` or `wineloader`; on Linux, Wine may rename the process
+/// after the program.
 fn is_wine(process: &sysinfo::Process) -> bool {
-    if !cfg!(target_os = "linux") {
+    if !catalog::WINE {
         return false;
     }
     let name = process

@@ -644,7 +644,7 @@ async fn plays_through_rpc(discord: &Discord, server: &str, directory: &std::pat
         );
         assert_eq!(
             std::fs::read_to_string(cache.with_extension("etag")).unwrap(),
-            r#"W/"fixture-games""#,
+            "2\nW/\"fixture-games\"",
             "the CDN's version, to ask with tomorrow"
         );
         Some(process)
