@@ -266,8 +266,10 @@ def main():
         (package / "README.txt").write_text(readme(args.flavour, minimum_system), encoding="utf-8")
         sign(app, identity)
         archive_path.unlink(missing_ok=True)
-        subprocess.run(["ditto", "-c", "-k", "--keepParent", str(package), str(archive_path)], check=True,
-                       timeout=600)
+        # Without the files' extended attributes, which ditto would store as
+        # ._ files that unzip writes into the signed bundle.
+        subprocess.run(["ditto", "-c", "-k", "--norsrc", "--noextattr", "--noqtn", "--noacl", "--keepParent",
+                        str(package), str(archive_path)], check=True, timeout=600)
         if app_path.exists():
             shutil.rmtree(app_path)
         shutil.move(app, app_path)

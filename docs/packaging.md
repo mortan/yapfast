@@ -140,7 +140,9 @@ session, such as Terminal.app: from tmux or ssh, `codesign` fails with
 `YAPFAST_CODESIGN_IDENTITY`. None is notarized, so Gatekeeper stops the
 downloaded app until it's allowed in System Settings › Privacy & Security, or
 its quarantine is removed (`xattr -dr com.apple.quarantine Yapfast.app`).
-`ditto -c -k --keepParent` zips the app's folder as Finder would.
+`ditto` zips the app's folder without the files' extended attributes and
+resource forks: kept, they'd go in as `._` files, which Archive Utility merges
+back but `unzip` writes into the bundle, where they break its signature.
 
 Opened from Finder or the Dock, Yapfast's output goes to `/dev/null`, so it
 writes its log to `~/Library/Logs/Yapfast/yapfast.log` instead, where Console
