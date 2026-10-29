@@ -73,21 +73,49 @@ fn main() -> Result<()> {
         logging::init_to_stderr();
         return yapfast_core::stream_worker::run();
     }
-    let mut arguments: Vec<_> = std::env::args().skip(1).collect();
-    let renderer = renderer_argument(&mut arguments)?;
-    let background = flag_argument(&mut arguments, "--background");
+    let arguments = launch_arguments(std::env::args().skip(1));
+    init_logging(&arguments);
+    let ran = run(arguments);
+    // Opened from Finder or Explorer, only the log says why Yapfast ended.
+    if let Err(error) = &ran
+        && logging::to_file()
+    {
+        tracing::error!(error = format!("{error:#}"), "Yapfast stopped");
+    }
+    ran
+}
+
+/// The command line's arguments, without the process serial number Finder
+/// gives the first start of a downloaded app, as `-psn_0_1234567`.
+fn launch_arguments(arguments: impl Iterator<Item = String>) -> Vec<String> {
+    arguments
+        .filter(|argument| !(cfg!(target_os = "macos") && argument.starts_with("-psn_")))
+        .collect()
+}
+
+/// Logs to the terminal or console Yapfast was started from, or without one
+/// on Windows and macOS to a file.
+fn init_logging(arguments: &[String]) {
     #[cfg(all(windows, feature = "desktop"))]
-    match data_directory(&arguments) {
+    match data_directory(arguments) {
         Some(directory) if !has_console() => logging::init_to_file(&directory.join("yapfast.log")),
         _ => logging::init(),
     }
     #[cfg(all(target_os = "macos", feature = "desktop"))]
-    match log_file(&arguments) {
+    match log_file(arguments) {
         Some(path) if !has_output() => logging::init_to_file(&path),
         _ => logging::init(),
     }
     #[cfg(not(all(any(windows, target_os = "macos"), feature = "desktop")))]
-    logging::init();
+    {
+        let _ = arguments;
+        logging::init();
+    }
+}
+
+fn run(mut arguments: Vec<String>) -> Result<()> {
+    let renderer = renderer_argument(&mut arguments)?;
+    let background = flag_argument(&mut arguments, "--background");
     yapfast_core::init_tls()?;
 
     let runtime = BackgroundRuntime::new().context("could not start background workers")?;
@@ -327,13 +355,25 @@ fn renderer_argument(arguments: &mut Vec<String>) -> Result<Option<&'static str>
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    fn arguments(given: &[&str]) -> Vec<String> {
+        launch_arguments(given.iter().map(|argument| argument.to_string()))
+    }
+
+    #[test]
+    fn finder_s_process_serial_number_is_no_argument() {
+        let given = arguments(&["-psn_0_1234567", "--background"]);
+        if cfg!(target_os = "macos") {
+            assert_eq!(given, ["--background"]);
+        } else {
+            assert_eq!(given, ["-psn_0_1234567", "--background"]);
+        }
+    }
+
     #[cfg(all(target_os = "macos", feature = "desktop"))]
     #[test]
     fn another_data_folder_keeps_its_own_log() {
-        use super::*;
-        let arguments = |given: &[&str]| -> Vec<String> {
-            given.iter().map(|argument| argument.to_string()).collect()
-        };
         assert_eq!(
             log_file(&arguments(&["--data-dir", "/tmp/second"])),
             Some("/tmp/second/yapfast.log".into())

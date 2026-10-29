@@ -21,7 +21,8 @@ pub fn init_to_stderr() {
 }
 
 /// Logs to `path`, for a Yapfast started without a console, as from Windows'
-/// Explorer. Each start adds to it; one past [`LOG_FILE_SIZE`] starts over.
+/// Explorer or macOS's Finder. Each start adds to it; one past
+/// [`LOG_FILE_SIZE`] starts over.
 /// Falls back to standard output when the file won't open.
 pub fn init_to_file(path: &Path) {
     if let Some(directory) = path.parent() {
@@ -53,6 +54,11 @@ pub fn init_to_file(path: &Path) {
                 .with_filter(filter()),
         )
         .try_init();
+}
+
+/// Whether Yapfast logs to a file, which alone would show why it ended.
+pub fn to_file() -> bool {
+    LOG_FILE.get().is_some()
 }
 
 /// Where a worker Yapfast starts writes its logs: Yapfast's log file, or Yapfast's
