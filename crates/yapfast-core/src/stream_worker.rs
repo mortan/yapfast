@@ -259,26 +259,29 @@ mod mac {
 fn sources(
     kind: livekit::webrtc::desktop_capturer::DesktopCaptureSourceType,
 ) -> Vec<livekit::webrtc::desktop_capturer::CaptureSource> {
-    livekit::webrtc::desktop_capturer::DesktopCapturer::new(capturer_options(kind))
+    capturer(kind, false)
         .map(|capturer| capturer.get_source_list())
         .unwrap_or_default()
 }
 
-/// How a capturer of `kind` is made. On macOS, LiveKit would have it ask
-/// the system's picker (`SCContentSharingPicker`) by default, listing one
-/// new placeholder each time in place of the screens; Yapfast lists them
-/// itself, with ScreenCaptureKit capturing the one picked by its display id.
-fn capturer_options(
+/// A capturer of `kind`, with the pointer in its frames or not, unless
+/// [`capture_refused`]. On macOS, LiveKit would have it ask the system's
+/// picker (`SCContentSharingPicker`) by default, listing one new placeholder
+/// each time in place of the screens; Yapfast lists them itself, with
+/// ScreenCaptureKit capturing the one picked by its display id.
+fn capturer(
     kind: livekit::webrtc::desktop_capturer::DesktopCaptureSourceType,
-) -> livekit::webrtc::desktop_capturer::DesktopCapturerOptions {
-    let options = livekit::webrtc::desktop_capturer::DesktopCapturerOptions::new(kind);
+    cursor: bool,
+) -> Result<livekit::webrtc::desktop_capturer::DesktopCapturer> {
+    if let Some(refused) = capture_refused() {
+        bail!(refused);
+    }
+    let mut options = livekit::webrtc::desktop_capturer::DesktopCapturerOptions::new(kind);
+    options.set_include_cursor(cursor);
     #[cfg(target_os = "macos")]
-    let options = {
-        let mut options = options;
-        options.set_sck_system_picker(false);
-        options
-    };
-    options
+    options.set_sck_system_picker(false);
+    livekit::webrtc::desktop_capturer::DesktopCapturer::new(options)
+        .context("Screen sharing isn't available on this system.")
 }
 
 /// What [`Source::Screen`] shares where Yapfast lists what to share: the pick
@@ -1102,9 +1105,7 @@ impl Capture {
         max_width: u32,
         max_height: u32,
     ) -> Result<Self> {
-        use livekit::webrtc::desktop_capturer::{
-            CaptureError, DesktopCaptureSourceType, DesktopCapturer,
-        };
+        use livekit::webrtc::desktop_capturer::{CaptureError, DesktopCaptureSourceType};
         // On Linux the system's screen sharing dialog picks a screen or window.
         #[cfg(target_os = "linux")]
         let kind = DesktopCaptureSourceType::Generic;
@@ -1113,13 +1114,7 @@ impl Capture {
             Source::Window(_) => DesktopCaptureSourceType::Window,
             _ => DesktopCaptureSourceType::Screen,
         };
-        if let Some(refused) = capture_refused() {
-            bail!(refused);
-        }
-        let mut options = capturer_options(kind);
-        options.set_include_cursor(true);
-        let mut capturer = DesktopCapturer::new(options)
-            .context("Screen sharing isn't available on this system.")?;
+        let mut capturer = capturer(kind, true)?;
         let captured = Arc::new(Mutex::new(Captured::default()));
         let (into, seen) = (sink.clone(), captured.clone());
         #[cfg(target_os = "linux")]
@@ -1241,14 +1236,8 @@ fn glance(
 /// A picture of the screen listed by `id`, at its own size.
 #[cfg(not(target_os = "linux"))]
 fn glance_at(id: u64, stop: &AtomicBool) -> Result<Option<I420Buffer>> {
-    use livekit::webrtc::desktop_capturer::{
-        CaptureError, DesktopCaptureSourceType, DesktopCapturer,
-    };
-    if let Some(refused) = capture_refused() {
-        bail!(refused);
-    }
-    let mut capturer = DesktopCapturer::new(capturer_options(DesktopCaptureSourceType::Screen))
-        .context("Screen sharing isn't available on this system.")?;
+    use livekit::webrtc::desktop_capturer::{CaptureError, DesktopCaptureSourceType};
+    let mut capturer = capturer(DesktopCaptureSourceType::Screen, false)?;
     let source = capturer
         .get_source_list()
         .into_iter()

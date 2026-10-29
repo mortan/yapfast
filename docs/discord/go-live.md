@@ -211,7 +211,7 @@ which the vendored webrtc-sys allows) and windows through Core Graphics'
 window list and its picture of each window. LiveKit would have a screen
 capturer ask macOS's own picker (`SCContentSharingPicker`), listing a new
 placeholder each time in place of the screens, so Yapfast turns the picker
-off (`capturer_options`) and lists screens by their display ids, like
+off (`stream_worker::capturer`) and lists screens by their display ids, like
 Windows. The share menu shows each screen's picture (`Job::Glance`) and each
 window by its title, or its application's name where it has none. Yapfast's
 own windows are left out by owner process id
