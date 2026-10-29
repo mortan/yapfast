@@ -21,9 +21,7 @@ use yapfast_discord::{
     stream_connection::{Sound, SoundSender},
 };
 
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
-use crate::audio_io::Heard;
-use crate::audio_io::{LastingOutput, RATE};
+use crate::audio_io::{Heard, LastingOutput, RATE};
 
 const CHANNELS: usize = 2;
 /// Samples of every channel in one 20 ms frame.
@@ -33,7 +31,6 @@ const FRAME: usize = RATE as usize / 50 * CHANNELS;
 const PRIMED: usize = FRAME * 2;
 /// The most kept for an application; older sound is dropped, so clock
 /// drift never grows into delay.
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
 const BACKLOG: usize = FRAME * 10;
 /// What Discord's client gives a stream's sound.
 const BITRATE: i32 = 64_000;
@@ -42,7 +39,6 @@ const BITRATE: i32 = 64_000;
 /// client, whose sound is a call or a stream: Yapfast's other workers, such as
 /// one playing a watched stream, and Discord's own client and those built
 /// on it.
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
 fn is_discord_client(name: &str) -> bool {
     if name == "Yapfast" {
         return true;
@@ -61,12 +57,10 @@ struct Input {
     samples: VecDeque<f32>,
     primed: bool,
     /// The process playing it, when the system says.
-    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
     process: Option<u32>,
 }
 
 impl Input {
-    #[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos", test))]
     fn push(&mut self, samples: impl IntoIterator<Item = f32>) {
         self.samples.extend(samples);
         let excess = self.samples.len().saturating_sub(BACKLOG);
@@ -102,7 +96,6 @@ fn mix(inputs: &mut HashMap<u32, Input>, out: &mut [f32]) -> bool {
 }
 
 /// Hears the other applications into `inputs` until `stop`.
-#[cfg(any(target_os = "linux", target_os = "windows", target_os = "macos"))]
 fn listen(inputs: Inputs, stop: Arc<AtomicBool>) -> Result<JoinHandle<()>> {
     crate::audio_io::others(
         is_discord_client,
@@ -137,12 +130,6 @@ fn listen(inputs: Inputs, stop: Arc<AtomicBool>) -> Result<JoinHandle<()>> {
         },
         stop,
     )
-}
-
-/// This system can't hear the other applications yet.
-#[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-fn listen(_: Inputs, _: Arc<AtomicBool>) -> Result<JoinHandle<()>> {
-    anyhow::bail!("Yapfast can't share sound on this system yet")
 }
 
 /// Captures and sends the stream's sound until dropped.

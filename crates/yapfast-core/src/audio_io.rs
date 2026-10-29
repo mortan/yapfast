@@ -11,10 +11,7 @@
 //! here yet.
 
 use std::{marker::PhantomData, time::Duration};
-#[cfg(all(
-    feature = "discord",
-    any(target_os = "linux", target_os = "windows", target_os = "macos")
-))]
+#[cfg(feature = "discord")]
 use std::{
     sync::{Arc, atomic::AtomicBool},
     thread::JoinHandle,
@@ -212,12 +209,12 @@ impl<S: Sample> Input<S> {
     }
 }
 
-/// What [`others`] hears from the other applications playing. Only Linux,
-/// Windows and macOS hear them.
-#[cfg(all(
-    feature = "discord",
-    any(target_os = "linux", target_os = "windows", target_os = "macos")
-))]
+/// What [`others`] hears from the other applications playing.
+#[cfg(feature = "discord")]
+#[cfg_attr(
+    not(any(target_os = "linux", target_os = "windows", target_os = "macos")),
+    allow(dead_code)
+)]
 pub enum Heard<'a> {
     /// An application started playing, from this process when the system says.
     Started {
@@ -239,10 +236,7 @@ pub enum Heard<'a> {
 /// Linux each application comes on its own, and those whose name or program
 /// `skip` picks are left out too; Windows and macOS mix them all into one.
 /// Returns once it hears, or with why it can't.
-#[cfg(all(
-    feature = "discord",
-    any(target_os = "linux", target_os = "windows", target_os = "macos")
-))]
+#[cfg(feature = "discord")]
 pub fn others(
     skip: fn(&str) -> bool,
     heard: impl FnMut(Heard<'_>) + Send + 'static,
@@ -251,10 +245,7 @@ pub fn others(
     platform::others(skip, Box::new(heard), stop)
 }
 
-#[cfg(all(
-    feature = "discord",
-    any(target_os = "linux", target_os = "windows", target_os = "macos")
-))]
+#[cfg(feature = "discord")]
 type Hear = Box<dyn FnMut(Heard<'_>) + Send>;
 
 #[cfg(test)]
@@ -390,10 +381,7 @@ mod tests {
     }
 
     /// Hears a tone another process plays, and not one this process plays.
-    #[cfg(all(
-        feature = "discord",
-        any(target_os = "linux", target_os = "windows", target_os = "macos")
-    ))]
+    #[cfg(feature = "discord")]
     #[test]
     #[ignore = "needs a sound server that hears other applications"]
     fn hears_other_applications() {
