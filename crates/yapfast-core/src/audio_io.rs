@@ -33,6 +33,8 @@ use wasapi as platform;
 mod coreaudio;
 #[cfg(target_os = "macos")]
 use coreaudio as platform;
+#[cfg(target_os = "macos")]
+pub(crate) use coreaudio::device_uid;
 
 #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
 mod unsupported;

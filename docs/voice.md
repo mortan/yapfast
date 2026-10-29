@@ -197,8 +197,13 @@ WebRTC's PulseAudio devices report no GUID, and LiveKit selects devices only by
 GUID, which would always choose the first device. Yapfast names such devices
 `name:` and their reported name, and selects them by their current index
 instead. On macOS WebRTC lists the default device first, with the GUID
-`default`, and the others with their Core Audio `AudioObjectID` in decimal,
-which `audio_io` opens directly.
+`default`, and the others with their Core Audio `AudioObjectID` in decimal, a
+number Core Audio hands out while it runs and may give another device after a
+restart or a reconnect. Yapfast keeps such a device by its Core Audio UID
+instead, which `audio_io` opens, and chooses it for a Yapfast call by the
+number WebRTC lists for that UID now. A number an older build saved in
+`devices.json` becomes its device's UID at the next start, if a device has
+it then.
 
 A call's own speakers and microphone, and a watched stream's sound, outlast
 their device (`audio_io::LastingOutput` and `LastingInput`). Bluetooth

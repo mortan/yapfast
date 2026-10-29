@@ -8,10 +8,13 @@
 //! AudioConverter on the reader's thread.
 //!
 //! WebRTC's macOS device module lists the default device first, as
-//! `default`, and the others by their `AudioObjectID` in decimal; Core Audio
-//! UIDs and `name:` ids open too. A unit stays on its device when the
-//! default changes, so [`endpoint`] names the device by its UID for
-//! `lasting.rs` to follow, as on Windows. The frameworks are declared here
+//! `default`, and the others by their `AudioObjectID` in decimal, a number
+//! Core Audio hands out while it runs, which a device may not get again
+//! after a restart or a reconnect. Yapfast keeps the device's UID instead
+//! ([`device_uid`]); those, `name:` ids and the numbers older builds kept
+//! all open. A unit stays on its device when the default changes, so
+//! [`endpoint`] names the device by its UID for `lasting.rs` to follow, as
+//! on Windows. The frameworks are declared here
 //! rather than through the objc2 bindings: a dozen C functions, with no
 //! Objective-C, don't need a crate. Hearing the other applications for Go
 //! Live is [`tap`]'s.
@@ -409,12 +412,26 @@ fn device(id: Option<&str>, output: bool) -> Result<AudioObjectID> {
     let mut listed = devices(output).into_iter();
     let found = if let Some(name) = id.strip_prefix(NAMED) {
         listed.find(|&device| string(device, sys::NAME).as_deref() == Some(name))
-    } else if let Ok(number) = id.parse::<AudioObjectID>() {
-        listed.find(|&device| device == number)
     } else {
-        listed.find(|&device| string(device, sys::DEVICE_UID).as_deref() == Some(id))
+        // A UID, or the number an older build kept, while it's still the
+        // device's.
+        let number = id.parse::<AudioObjectID>().ok();
+        listed.find(|&device| {
+            Some(device) == number || string(device, sys::DEVICE_UID).as_deref() == Some(id)
+        })
     };
     found.context("device not found")
+}
+
+/// The UID of the device WebRTC lists as `guid`, its number, which Yapfast
+/// keeps in its place; none for an id that isn't a connected device's
+/// number, such as `default`.
+pub fn device_uid(guid: &str) -> Option<String> {
+    let number = guid.parse::<AudioObjectID>().ok()?;
+    objects(sys::DEVICES)
+        .contains(&number)
+        .then(|| string(number, sys::DEVICE_UID))
+        .flatten()
 }
 
 /// The device a stream for `id` would open now, by its UID: the device's
@@ -1121,6 +1138,23 @@ impl Input {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The default speakers open by their UID, and by the number older
+    /// builds kept; a number no device has opens nothing.
+    #[test]
+    fn devices_open_by_uid_and_number() {
+        let Ok(speakers) = device(None, true) else {
+            eprintln!("no speakers");
+            return;
+        };
+        let number = speakers.to_string();
+        let uid = device_uid(&number).expect("the speakers' UID");
+        assert_eq!(device(Some(&uid), true).unwrap(), speakers);
+        assert_eq!(device(Some(&number), true).unwrap(), speakers);
+        assert_eq!(device_uid(DEFAULT), None);
+        assert_eq!(device_uid(&u32::MAX.to_string()), None);
+        assert!(device(Some(&u32::MAX.to_string()), true).is_err());
+    }
 
     #[test]
     fn the_ring_wraps_around() {

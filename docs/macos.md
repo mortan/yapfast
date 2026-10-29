@@ -35,7 +35,8 @@ Yapfast does on macOS what it does on Linux, apart from what's
 
 - **Sound.** Calls, the input meter, ringing, Yapfast's sounds and a watched
   stream's or a video's sound go through Core Audio's HAL output unit, one
-  per stream, and a ring between it and the caller
+  per stream, and a ring between it and the caller. Devices are kept by
+  their Core Audio UID
   ([architecture](architecture.md#how-a-ui-change-flows-through-the-code);
   [voice](voice.md#sounds) has how devices are named and followed).
 - **Go Live's sound** is a Core Audio process tap of every process but

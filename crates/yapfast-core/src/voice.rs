@@ -617,21 +617,46 @@ pub(crate) struct Chosen {
 
 impl Chosen {
     pub(crate) fn read(path: &Path) -> Self {
-        std::fs::read(path)
+        #[cfg_attr(not(target_os = "macos"), allow(unused_mut))]
+        let mut chosen: Self = std::fs::read(path)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Older builds kept a Mac's devices by WebRTC's number for them,
+        // which another device may get; each still connected moves to its
+        // UID, as `device_id` lists it.
+        #[cfg(target_os = "macos")]
+        {
+            let mut moved = false;
+            for id in [&mut chosen.microphone, &mut chosen.speaker]
+                .into_iter()
+                .flatten()
+            {
+                if let Some(uid) = crate::audio_io::device_uid(id) {
+                    *id = uid;
+                    moved = true;
+                }
+            }
+            if moved {
+                chosen.save(path);
+            }
+        }
+        chosen
     }
 
     pub(crate) fn write(path: Option<&Path>, state: &State) {
         let Some(path) = path else { return };
-        let chosen = Self {
+        Self {
             microphone: state.microphone.clone(),
             speaker: state.speaker.clone(),
             camera: state.camera.clone(),
             quality: state.quality,
-        };
-        let result = serde_json::to_vec_pretty(&chosen)
+        }
+        .save(path);
+    }
+
+    fn save(&self, path: &Path) {
+        let result = serde_json::to_vec_pretty(self)
             .map_err(std::io::Error::other)
             .and_then(|bytes| std::fs::write(path, bytes));
         if let Err(error) = result {
@@ -694,13 +719,20 @@ pub(crate) fn collect_devices(audio: &PlatformAudio, state: &mut State) {
 
 /// WebRTC's PulseAudio devices have no GUID, and LiveKit selects only by GUID,
 /// which would always pick the first device. Those devices go by name instead,
-/// as `name:` and the name WebRTC reports.
+/// as `name:` and the name WebRTC reports. On macOS the GUID is the device's
+/// number, which Core Audio may give another device after a restart or a
+/// reconnect, so a device goes by its Core Audio UID instead. Choosing a
+/// device for LiveKit matches each listed one's id, so it finds the number
+/// the UID's device has now.
 pub(crate) fn device_id(guid: &str, name: &str) -> String {
     if guid.is_empty() {
-        format!("{NAMED}{name}")
-    } else {
-        guid.into()
+        return format!("{NAMED}{name}");
     }
+    #[cfg(target_os = "macos")]
+    if let Some(uid) = crate::audio_io::device_uid(guid) {
+        return uid;
+    }
+    guid.into()
 }
 
 /// Marks a device id made from the device's name.
@@ -741,6 +773,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(Chosen::read(&path).quality, StreamQuality::default());
+        // A number no device has stays as it was.
+        std::fs::write(&path, br#"{"microphone": "4294967295", "speaker": null}"#).unwrap();
+        assert_eq!(
+            Chosen::read(&path).microphone.as_deref(),
+            Some("4294967295")
+        );
         std::fs::write(&path, b"not json").unwrap();
         assert!(Chosen::read(&path).speaker.is_none());
     }
