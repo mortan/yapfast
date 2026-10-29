@@ -139,9 +139,10 @@ def main():
             "If anything fails, record the error text, Windows version, GPU and\n"
             f"audio device model. Never send your {secrets} in logs.\n\n"
             "If Yapfast closes immediately, run run-yapfast.cmd to keep its error visible.\n\n"
-            "Yapfast switches to software rendering if the GPU cannot start.\n"
-            "To choose it yourself, run run-yapfast.cmd --renderer software.\n"
-            "To retry the GPU after a fallback, run run-yapfast.cmd --renderer gpu.\n\n"
+            "Yapfast draws with software rendering. Render with the GPU, in Settings >\n"
+            "Advanced, switches to Direct3D from the next start; Yapfast goes back to\n"
+            "software rendering if the GPU cannot start. To choose for one start, run\n"
+            "run-yapfast.cmd --renderer software (or --renderer gpu).\n\n"
             "Yapfast is free software under the GNU General Public License, version 3\n"
             "or later, in LICENSE.txt. Dependency notices and original licenses are\n"
             "included; SOURCE.txt says where this build's source code is published.\n",
@@ -168,8 +169,8 @@ def main():
             "rustc": subprocess.check_output(["rustc", "--version"], text=True, timeout=10).strip(),
             "cargo_xwin": subprocess.check_output(["cargo", "xwin", "--version"], text=True, timeout=10).strip(),
             "ui_framework": UI_FRAMEWORK,
-            "renderer_default": "skia-opengl, falling back to skia-software",
-            "renderer_software": "skia-software",
+            "renderer_default": "skia-software",
+            "renderer_gpu": "skia-direct3d, falling back to skia-software",
             "skia_version": SKIA_VERSION,
             "skia_source_revision": "61e7ca4e99062cdd0ab69445d5963fb3365778f6",
             "skia_source_archive_sha256": "8401d0de878582a03abc1029bb62330aea58cda89904ae6ab187302e6d48ba5d",
