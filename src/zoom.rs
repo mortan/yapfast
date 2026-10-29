@@ -1,6 +1,6 @@
 //! Zooming the whole window, as browsers do: Ctrl with + or -, or with the
 //! scroll wheel, steps through [`LEVELS`], and Ctrl+0 returns to 100%. On
-//! macOS the key is Cmd, as there in browsers; see [`command`].
+//! macOS the key is Cmd, as there in browsers; see [`COMMAND`].
 //!
 //! Slint draws everything in logical pixels, so the zoom multiplies the
 //! display's own scale factor: text, spacing and pictures all grow together,
@@ -28,16 +28,14 @@ const MIN_HEIGHT: f32 = 560.;
 /// makes one step.
 const PIXELS_PER_STEP: f64 = 60.;
 
-/// Whether the zoom key is held: Ctrl, or Cmd on macOS. These events come
-/// from winit before Slint's, so Slint's swap of the two on macOS, which
-/// makes `modifiers.control` in `.slint` Cmd, doesn't apply here.
-fn command(modifiers: ModifiersState) -> bool {
-    if cfg!(target_os = "macos") {
-        modifiers.super_key()
-    } else {
-        modifiers.control_key()
-    }
-}
+/// The zoom key: Ctrl, or Cmd on macOS. These events come from winit before
+/// Slint's, so Slint's swap of the two on macOS, which makes
+/// `modifiers.control` in `.slint` Cmd, doesn't apply here.
+const COMMAND: ModifiersState = if cfg!(target_os = "macos") {
+    ModifiersState::SUPER
+} else {
+    ModifiersState::CONTROL
+};
 
 /// What Ctrl (Cmd on macOS) and a key or the wheel asked for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -72,7 +70,7 @@ impl Keys {
     pub fn event(&mut self, event: &WindowEvent) -> Outcome {
         match event {
             WindowEvent::ModifiersChanged(modifiers) => {
-                self.control = command(modifiers.state());
+                self.control = modifiers.state().contains(COMMAND);
                 self.alt = modifiers.state().alt_key();
                 if !self.control {
                     self.scrolled = 0.;
@@ -270,12 +268,7 @@ mod tests {
             matches!(keys.event(&pixels(30.)), Outcome::Pass),
             "without Ctrl it scrolls"
         );
-        let command = if cfg!(target_os = "macos") {
-            ModifiersState::SUPER
-        } else {
-            ModifiersState::CONTROL
-        };
-        keys.event(&WindowEvent::ModifiersChanged(command.into()));
+        keys.event(&WindowEvent::ModifiersChanged(COMMAND.into()));
         assert!(matches!(keys.event(&pixels(30.)), Outcome::Taken));
         assert!(matches!(keys.event(&pixels(40.)), Outcome::Step(Step::In)));
         assert!(matches!(keys.event(&pixels(-20.)), Outcome::Taken));
