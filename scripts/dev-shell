@@ -1,0 +1,8 @@
+# Sourced by the scripts that run in the development shell, once they're in
+# the repository's root: outside the shell, it runs the calling script again
+# inside it, through scripts/macos-env on a Mac and `nix develop path:./nix`
+# elsewhere. Sourced without arguments, $0 and "$@" are the caller's.
+if [[ -z "${IN_NIX_SHELL:-}${YAPFAST_MACOS_ENV:-}" ]]; then
+  [[ $(uname) == Darwin ]] && exec scripts/macos-env "$0" "$@"
+  exec nix develop path:./nix --command "$0" "$@"
+fi

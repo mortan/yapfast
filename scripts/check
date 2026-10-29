@@ -9,10 +9,7 @@
 set -uo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-if [[ -z "${IN_NIX_SHELL:-}${YAPFAST_MACOS_ENV:-}" ]]; then
-  [[ $(uname) == Darwin ]] && exec scripts/macos-env "$0" "$@"
-  exec nix develop path:./nix --command "$0" "$@"
-fi
+source scripts/dev-shell
 
 # Expanded as ${profile[@]+"${profile[@]}"}: macOS's bash 3.2 calls an empty
 # array unbound under `set -u`.

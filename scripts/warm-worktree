@@ -11,10 +11,7 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-if [[ -z "${IN_NIX_SHELL:-}${YAPFAST_MACOS_ENV:-}" ]]; then
-  [[ $(uname) == Darwin ]] && exec scripts/macos-env "$0" "$@"
-  exec nix develop path:./nix --command "$0" "$@"
-fi
+source scripts/dev-shell
 
 main=$(git worktree list --porcelain | sed -n '1s/^worktree //p')
 if [[ "$main" == "$PWD" ]]; then
