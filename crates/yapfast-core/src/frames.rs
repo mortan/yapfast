@@ -236,6 +236,12 @@ mod shm {
         Ok(unsafe { File::from_raw_fd(fd) })
     }
 
+    /// Creates an object of this name, as an ended Yapfast leaves one.
+    #[cfg(test)]
+    pub fn create_named(path: &Path) -> io::Result<File> {
+        open_with(path, O_RDWR | O_CREAT | O_EXCL)
+    }
+
     /// Creates a new object, empty until it's sized.
     pub fn create() -> io::Result<(File, Name)> {
         static CREATED: AtomicUsize = AtomicUsize::new(0);
@@ -249,8 +255,13 @@ mod shm {
             match open_with(&path, O_RDWR | O_CREAT | O_EXCL) {
                 Ok(file) => return Ok((file, Name(path))),
                 // Left by an earlier Yapfast with this process id that ended
-                // before its worker opened it.
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                // before its worker opened it, and kept in memory until
+                // removed: a live process with this id is this one, which
+                // never names two alike, so it goes, and the next name is
+                // tried. A worker that still maps it keeps its mapping.
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {
+                    drop(Name(path));
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -404,6 +415,15 @@ impl Writer {
 mod tests {
     use super::*;
 
+    /// Whether the frames' name is gone: on macOS a shared memory object's
+    /// name, which no file path shows.
+    fn gone(path: &Path) -> bool {
+        match cfg!(target_os = "macos") {
+            true => Writer::open(path).is_err(),
+            false => !path.exists(),
+        }
+    }
+
     #[test]
     fn frames_pass_from_writer_to_reader() {
         let frames = Frames::create(4, 2).unwrap();
@@ -412,8 +432,7 @@ mod tests {
         frames.unlink();
         assert!(frames.path().is_none());
         if cfg!(not(windows)) {
-            assert!(!path.exists());
-            assert!(Writer::open(&path).is_err(), "its name is gone");
+            assert!(gone(&path), "its name is gone");
         }
         assert!(frames.take(|_, _, _| ()).is_none(), "nothing yet");
         assert!(writer.fits(2, 4) && !writer.fits(5, 2));
@@ -438,6 +457,35 @@ mod tests {
         assert_eq!(frames.take_timed(|_, _, _| ()), Some(((), 1234)));
 
         drop((writer, frames));
-        assert!(!path.exists(), "gone once both let go");
+        assert!(gone(&path), "gone once both let go");
+    }
+
+    /// Frames dropped before the worker said it's ready, as when it refuses
+    /// the job, take their name with them.
+    #[test]
+    fn dropped_frames_take_their_name() {
+        let frames = Frames::create(4, 2).unwrap();
+        let path = frames.path().unwrap();
+        drop(frames);
+        assert!(gone(&path), "dropping removes the name");
+    }
+
+    /// An object an earlier Yapfast with this process id left goes when its
+    /// name comes round.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_leftover_shared_memory_object_goes() {
+        let frames = Frames::create(4, 2).unwrap();
+        let name = frames.path().unwrap();
+        let name = name.to_str().unwrap();
+        let (prefix, count) = name.rsplit_once('-').unwrap();
+        let next = PathBuf::from(format!("{prefix}-{}", count.parse::<usize>().unwrap() + 1));
+        // Another test may have taken that name first.
+        let Ok(_left) = shm::create_named(&next) else {
+            return;
+        };
+        let later = Frames::create(4, 2).unwrap();
+        assert_ne!(later.path().as_deref(), Some(next.as_path()));
+        assert!(gone(&next), "the leftover went");
     }
 }

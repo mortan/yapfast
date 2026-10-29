@@ -44,7 +44,9 @@ file in the runtime directory. The file is unlinked once the worker opens it.
 Windows won't delete a mapped file, so there it's a temporary file that
 Windows deletes once both processes close it. macOS's temporary directory is
 on disk, so there the frames are a POSIX shared memory object (`shm_open`),
-whose name the worker opens and which is unlinked the same way. Its memory is
+whose name the worker opens and which is unlinked the same way; one an
+ended Yapfast left under this process's id is unlinked when its name comes
+round. Its memory is
 anonymous, so `footprint` counts it in both processes, though it's there
 once: 25 MB while watching or playing at 1080p, 11 MB for a shared screen's
 preview.
