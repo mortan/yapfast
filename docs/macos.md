@@ -1,8 +1,9 @@
 # macOS
 
 Yapfast runs on Macs with Apple silicon, on macOS 14 or later; sharing other
-apps' sound in Go Live needs 14.4. Intel Macs aren't built for. There's no
-published package: `scripts/build-macos` builds the app on a Mac, as
+apps' sound in Go Live needs 14.4. Intel Macs aren't built for. The
+[nightlies](packaging.md#nightly-releases) carry a ZIP of the Discord-only app;
+otherwise `scripts/build-macos` builds it on a Mac, as
 [packaging](packaging.md#macos-app) describes. Like Windows, it comes in two
 flavours: the release's Discord-only build, the default, and `full`, which
 adds Matrix. Both are `Yapfast.app` with the bundle id

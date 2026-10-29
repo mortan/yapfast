@@ -158,15 +158,22 @@ the packages and `SOURCE.txt` name it. One job runs `scripts/build-appimage`
 and `scripts/package-arch`, and another `scripts/build-windows` in the Windows shell, with the Windows Skia
 build, cargo-xwin's MSVC files and the compiled Rust dependencies
 (`Swatinem/rust-cache`) cached between runs. The Linux build has no cache: it
-compiles in the Nix sandbox, which can't reach one. The last job publishes the
-AppImage, its `.zsync` file, the Arch package, the Windows ZIP, the source snapshot and
-`SHA256SUMS.txt` as a prerelease on that commit. Wine doesn't start on the
+compiles in the Nix sandbox, which can't reach one. A third runs
+`scripts/build-macos` on GitHub's free Apple silicon runner (`macos-15`: 3
+cores, 7 GB), with Homebrew's tools, two compiles at a time so the UI crate
+fits in memory, and libwebrtc, Skia and the compiled Rust dependencies cached;
+its app is signed ad hoc. The last job publishes the
+AppImage, its `.zsync` file, the Arch package, the Windows ZIP, the macOS ZIP,
+the source snapshot and `SHA256SUMS.txt` as a prerelease on that commit. A
+failed macOS build doesn't hold the nightly back: it goes out without the
+macOS ZIP, with a warning. Wine doesn't start on the
 runner, so there's no installer. The release's notes list the commits since the
 previous nightly, or the latest release, each with its author's GitHub account:
 features and fixes by their Conventional Commit type, the rest folded away
-(`.github/nightly-notes.jq`). Every nightly stays on the releases page. Both
-builds zip the source snapshot with the commit's time on every file, so they
-make the same file, and the release carries one. A prerelease is never
+(`.github/nightly-notes.jq`). Every nightly stays on the releases page. Every
+build zips the source snapshot with the commit's time on every file, so they
+make the same file, and the release carries one; a macOS ZIP whose snapshot
+differs is left out. A prerelease is never
 `latest`, so the AppImage's update information leaves stable installs on stable
 releases, and takes a nightly AppImage to the latest stable release, not the
 next nightly.

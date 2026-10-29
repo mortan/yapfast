@@ -290,9 +290,11 @@ Then [build it yourself](#build-it-yourself).
 ### macOS
 
 For Macs with Apple silicon, on macOS 14 or newer (sharing other apps' sound
-in Go Live needs 14.4). There's no download yet, so build it yourself for
-now. With Xcode or its command line tools and [Homebrew](https://brew.sh),
-from a clone of this repository:
+in Go Live needs 14.4). The nightlies on the releases page carry a ZIP of
+`Yapfast.app`; it isn't notarized, so allow it in System Settings › Privacy &
+Security after the first try to open it. Or build it yourself, with Xcode or
+its command line tools and [Homebrew](https://brew.sh), from a clone of this
+repository:
 
 ```sh
 brew install rustup protobuf llvm@21

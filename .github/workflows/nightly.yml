@@ -1,5 +1,5 @@
 # A nightly release of main, made on demand: Actions > Nightly > Run workflow.
-# It builds the Linux AppImage and the Windows ZIP as the releases are built, and publishes them as a prerelease of the next minor
+# It builds the Linux AppImage, the Windows ZIP and the macOS ZIP as the releases are built, and publishes them as a prerelease of the next minor
 # version, such as v0.2.0-nightly.20261020.5. See docs/packaging.md.
 name: Nightly
 
@@ -100,8 +100,47 @@ jobs:
           if-no-files-found: error
           compression-level: 0
 
+  # The free Apple silicon runner: 3 cores, 7 GB and 14 GB of disk.
+  macos:
+    needs: version
+    runs-on: macos-15
+    env:
+      # A compile of the UI crate takes 6-8 GiB; two at a time fit, three
+      # ran a 24 GiB Mac out of memory.
+      CARGO_BUILD_JOBS: 2
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ needs.version.outputs.commit }}
+      # What scripts/macos-env asks for; the runner has Xcode.
+      - run: brew install rustup protobuf llvm@21
+      # LiveKit's libwebrtc and the prepared Skia, which scripts/macos-env
+      # downloads and checks.
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/yapfast-build
+          key: macos-build-${{ hashFiles('scripts/macos-env', 'nix/prepare-skia-native.py') }}
+      # Before scripts/set-version, as in the Windows job.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+      - run: scripts/set-version "${{ needs.version.outputs.version }}"
+      - name: Fetch the toolchain and crates
+        run: scripts/macos-env cargo fetch --locked
+      # Signed ad hoc and not notarized, as docs/packaging.md says.
+      - run: scripts/build-macos discord
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: target/dist/macos/Yapfast-*
+          if-no-files-found: error
+          compression-level: 0
+
   release:
-    needs: [version, linux, windows]
+    needs: [version, linux, windows, macos]
+    # A failed macOS build leaves the macOS ZIP out instead of holding back
+    # Linux and Windows.
+    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -129,6 +168,15 @@ jobs:
           mkdir release
           mv dist/linux/Yapfast-* dist/linux/yapfast-*.pkg.tar.zst release/
           mv dist/windows/Yapfast-*-windows-x64* release/
+          # The macOS app's BUILD.json names the source snapshot by its hash,
+          # so it ships only with the same snapshot.
+          if [ ! -d dist/macos ]; then
+            echo "::warning::The macOS build failed; this nightly has no macOS ZIP."
+          elif cmp "dist/linux/Yapfast-$VERSION-source.zip" "dist/macos/Yapfast-$VERSION-source.zip"; then
+            mv dist/macos/Yapfast-*-macos-arm64.zip release/
+          else
+            echo "::warning::The macOS build zipped another source snapshot; this nightly has no macOS ZIP."
+          fi
           (cd release && sha256sum Yapfast-* yapfast-*.pkg.tar.zst > SHA256SUMS.txt)
           # The newest nightly, or before the first one the latest release.
           previous=$(gh release list --exclude-drafts --limit 100 --json tagName \
@@ -150,6 +198,8 @@ jobs:
             echo "AppImage updaters take the AppImage to the latest stable release, not to newer nightlies."
             echo
             echo "On Arch Linux, install the .pkg.tar.zst with \`sudo pacman -U\` and its link."
+            echo
+            echo "The macOS ZIP is for Apple silicon and isn't notarized: allow Yapfast.app in System Settings › Privacy & Security after the first try to open it, or run \`xattr -dr com.apple.quarantine Yapfast.app\`."
           } > notes.md
           # Titled as the stable releases are, with the commit: the version
           # already says it's a nightly.
