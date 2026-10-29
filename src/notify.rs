@@ -66,11 +66,11 @@ impl Notifier {
 /// The body of a notification: the message, or for privacy only that there is one.
 /// A call's says only that it's ringing.
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-fn body(alert: &Alert, style: Style) -> String {
+fn body(alert: &Alert, style: Style) -> &str {
     if style.text || alert.call {
-        alert.body.clone()
+        &alert.body
     } else {
-        "New message".into()
+        "New message"
     }
 }
 
@@ -120,10 +120,10 @@ mod linux {
             tracing::warn!(%error, "notifications can't open their conversations");
         }
         for (alert, style) in alerts {
-            let mut body = super::body(&alert, style);
-            if markup {
-                body = escape(&body);
-            }
+            let body = match markup {
+                true => escape(super::body(&alert, style)),
+                false => super::body(&alert, style).to_owned(),
+            };
             let mut hints = HashMap::<&str, Value>::new();
             hints.insert("category", Value::from("im.received"));
             // Yapfast plays its own sounds, and rings for a call itself.
@@ -370,7 +370,7 @@ mod macos {
         pub fn show(&self, alert: &Alert, style: Style) {
             let content = UNMutableNotificationContent::new();
             content.setTitle(&NSString::from_str(&alert.title));
-            content.setBody(&NSString::from_str(&super::body(alert, style)));
+            content.setBody(&NSString::from_str(super::body(alert, style)));
             let room = NSString::from_str(&alert.room);
             content.setThreadIdentifier(&room);
             // No sound: Yapfast plays its own, and rings for a call itself.
