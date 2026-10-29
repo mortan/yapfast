@@ -2094,7 +2094,33 @@ impl Adapter {
                     self.preview_camera = None;
                     if let Some((camera, feed)) = filming {
                         let sink = Box::new(feed.mirrored_sink());
-                        match yapfast_core::camera::Camera::open(camera.as_deref(), sink) {
+                        // A camera that opens once macOS allows it says here
+                        // why it didn't.
+                        let (failed, failure) = tokio::sync::oneshot::channel::<String>();
+                        let weak = self.weak.clone();
+                        let heard = slint::spawn_local(async move {
+                            let (Ok(reason), Some(adapter)) = (failure.await, weak.upgrade())
+                            else {
+                                return;
+                            };
+                            let window = adapter.borrow().window.upgrade();
+                            let mut adapter = adapter.borrow_mut();
+                            adapter.app.state.voice.error = Some(reason);
+                            if let Some(window) = window {
+                                adapter.refresh(&window);
+                            }
+                        });
+                        if let Err(error) = heard {
+                            tracing::warn!(%error, "could not wait for the camera preview's failure");
+                        }
+                        let failed = Box::new(move |reason| {
+                            let _ = failed.send(reason);
+                        });
+                        match yapfast_core::camera::Camera::open_then(
+                            camera.as_deref(),
+                            sink,
+                            failed,
+                        ) {
                             Ok(camera) => self.preview_camera = Some(camera),
                             Err(error) => self.app.state.voice.error = Some(error.to_string()),
                         }

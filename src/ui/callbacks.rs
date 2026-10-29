@@ -2526,7 +2526,13 @@ fn start_camera_test(adapter: &mut Adapter, window: &YapfastWindow) {
     let feed = yapfast_core::picture::Feed::new();
     feed.show_at(Some(((400.0 * scale) as u32, (225.0 * scale) as u32)));
     let camera = adapter.app.state.voice.camera.clone();
-    match yapfast_core::camera::Camera::open(camera.as_deref(), Box::new(feed.sink())) {
+    // A camera that opens once macOS allows it says here why it didn't.
+    let weak = window.as_weak();
+    let failed = Box::new(move |reason: String| {
+        let _ = weak.upgrade_in_event_loop(move |window| window.set_camera_note(reason.into()));
+    });
+    let sink = Box::new(feed.sink());
+    match yapfast_core::camera::Camera::open_then(camera.as_deref(), sink, failed) {
         Ok(camera) => adapter.camera_test = Some((camera, feed)),
         Err(error) => window.set_camera_note(error.to_string().into()),
     }

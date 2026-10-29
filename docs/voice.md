@@ -151,8 +151,8 @@ A call opens its camera on a blocking thread, which waits for the answer.
 Settings' "Test video" and the camera preview open theirs on the main thread,
 which mustn't wait, so the camera opens once the person allows it, on the
 thread macOS answers on, unless the test or preview has stopped by then.
-A refusal there leaves the preview empty, and the next open says where to
-allow it. Run from a terminal, macOS asks on behalf of the terminal app.
+A refusal there, or a camera that then fails to open, shows its reason under
+the test or the preview as soon as macOS answers. Run from a terminal, macOS asks on behalf of the terminal app.
 
 `YAPFAST_CAMERA_TEST_PATTERN=1` adds a "Test pattern" camera that films moving
 bars, for tests and machines without a camera. `cargo test -p yapfast-core

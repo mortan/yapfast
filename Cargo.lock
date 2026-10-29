@@ -11544,6 +11544,7 @@ dependencies = [
  "skia-safe",
  "slint",
  "tempfile",
+ "tokio",
  "tracing",
  "wayland-backend",
  "wayland-client",
