@@ -1210,9 +1210,11 @@ export component AdvancedSettings inherits VerticalLayout {
         checked <=> root.close-to-tray;
         toggled => { root.preferences-changed(); }
     }
-    if !root.macos: SettingsSwitch {
+    // macOS reaches the running app on its own, so the switch shows there
+    // only while an earlier build left it on, to turn it off.
+    if !root.macos || root.multiple-windows: SettingsSwitch {
         text: "Allow multiple windows";
-        description: "Starting Yapfast while it runs opens another Yapfast, with its own window and tray icon. Off, it brings the open window forward.";
+        description: "Starting Yapfast while it runs opens another Yapfast, with its own window and " + (root.macos ? "menu bar icon" : "tray icon") + ". Off, it brings the open window forward.";
         checked <=> root.multiple-windows;
         toggled => { root.preferences-changed(); }
     }

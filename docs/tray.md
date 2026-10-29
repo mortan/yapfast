@@ -20,8 +20,9 @@ one's window forward, making it again if it was closed to the tray, and the
 new start ends (`src/instance.rs`). A start with `--background`, as at
 sign-in, just ends. Settings → Advanced → "Allow multiple windows"
 (`multiple_windows` in `layout.json`, off unless turned on) starts another
-Yapfast instead, with its own window and tray icon; macOS hides the switch,
-as opening `Yapfast.app` again reaches the running app. Each folder is its own:
+Yapfast instead, with its own window and tray icon; macOS shows the switch
+only while it's on, as opening `Yapfast.app` again reaches the running app,
+so that one turned on by an earlier build can be turned off. Each folder is its own:
 another `--data-dir` always starts. The preview never asks.
 
 The first start holds a lock on `instance.lock` in the folder, which the
