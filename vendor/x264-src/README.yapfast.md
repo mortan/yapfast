@@ -4,19 +4,24 @@
 (2025-01-03, core 164) from https://code.videolan.org/videolan/x264, under its
 original GPL-2.0-or-later license (`x264/COPYING`). Its files are unchanged;
 only those a library build for 8-bit 4:2:0 video uses are kept: `x264.h`,
-`common/` with `common/x86/`, and `encoder/`, without OpenCL. The
-command-line tool, its filters and the other processors' code are left out.
+`common/` with `common/x86/` and `common/aarch64/` (without its SVE files),
+and `encoder/`, without OpenCL. The command-line tool, its filters and the
+other processors' code are left out.
 
 `build.rs` stands in for x264's configure and Makefile. It writes the
-`config.h` and `x264_config.h` configure would for Linux and Windows,
+`config.h` and `x264_config.h` configure would for Linux, Windows and macOS,
 compiles the C files with the compiler `cc` picks (clang, or clang-cl for
 Windows), and assembles the x86-64 assembly with nasm (`$NASM`, or `nasm` on
-the PATH). On other processors it builds the plain C code, without assembly.
-Two settings differ from configure's: the stack alignment is 16 bytes on every
-compiler, which x264's assembly realigns for, and transparent huge pages stay
-off, which would round x264's large buffers up to 2 MiB pages.
+the PATH). On Apple silicon the same compiler assembles the Arm (NEON)
+assembly, with `PREFIX` and `PIC` as configure sets them for macOS. On other
+processors it builds the plain C code, without assembly. Three settings
+differ from configure's: the stack alignment is 16 bytes on every compiler,
+which x264's assembly realigns for; transparent huge pages stay off, which
+would round x264's large buffers up to 2 MiB pages; and the SVE assembly
+isn't built, which x264 would use on macOS only when the compiler targets
+SVE, as no Mac's processor has it.
 
 To move to a newer x264, copy the same folders from its source, update the
 file lists in `build.rs` from its Makefile (`make -n lib-static` after
-`./configure --disable-cli --bit-depth=8 --chroma-format=420
+`./configure --disable-cli --enable-static --bit-depth=8 --chroma-format=420
 --disable-opencl` shows them), and the commit in `X264_CONFIG` and here.

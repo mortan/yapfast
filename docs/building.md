@@ -232,7 +232,8 @@ dependency in Cargo.toml:
 trimmed to what an 8-bit encoder library uses, with a build script in place of
 its configure and Makefile. Go Live and the camera encode H264 with it; NASM
 assembles its x86-64 code, so every x86-64 shell, package and native build
-needs `nasm`. On Apple silicon it builds as plain C, without `nasm`.
+needs `nasm`. On Apple silicon the C compiler assembles its Arm (NEON) code,
+without `nasm`.
 
 `vendor/ffmpeg-src` is FFmpeg's source trimmed to its hardware encoders
 (NVENC, AMF on Windows, VA-API on Linux) and its HEVC decoder, with

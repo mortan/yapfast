@@ -46,8 +46,8 @@ Yapfast does on macOS what it does on Linux, apart from what's
   The share menu lists them itself, without macOS's picker, and leaves out
   Yapfast's own windows ([Go Live on macOS](discord/go-live.md#go-live-on-macos)).
 - **Encoding.** Go Live's H264 and H265 go to VideoToolbox's hardware
-  encoder, and to x264, built as plain C on Apple silicon, when "Encode
-  streams with the GPU" is off or VideoToolbox fails
+  encoder, and to x264, with its Arm (NEON) assembly, when "Encode streams
+  with the GPU" is off or VideoToolbox fails
   ([On macOS](discord/go-live.md#on-macos)). The camera encodes with x264.
 - **Decoding.** VideoToolbox decodes watched H264 and H265 streams and video
   files' H264, since libwebrtc's FFmpeg on macOS has no H264 decoder. It

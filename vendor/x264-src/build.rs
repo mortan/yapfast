@@ -1,9 +1,10 @@
 //! Builds x264's encoder library from x264/: 8-bit 4:2:0 video only, without
 //! its command-line tool or OpenCL, as x264's configure and Makefile would
 //! with `--disable-cli --bit-depth=8 --chroma-format=420 --disable-opencl`.
-//! The configuration configure would detect is written here, for Linux and
-//! Windows; x86-64 gets x264's assembly, which nasm assembles ($NASM, or
-//! nasm on the PATH), and other processors its plain C.
+//! The configuration configure would detect is written here, for Linux,
+//! Windows and macOS. x86-64 gets x264's assembly, which nasm assembles
+//! ($NASM, or nasm on the PATH), Apple silicon its Arm (NEON) assembly, which
+//! the C compiler assembles, and other processors its plain C.
 
 use std::{
     env, fs,
@@ -66,6 +67,24 @@ const X86_ASM: &[&str] = &[
     "quant-a.asm",
     "sad-a.asm",
 ];
+/// The Arm C files, built for each bit depth.
+const AARCH64_C: &[&str] = &[
+    "common/aarch64/asm-offsets.c",
+    "common/aarch64/mc-c.c",
+    "common/aarch64/predict-c.c",
+];
+/// Arm assembly for each bit depth, without the SVE files, which x264 would
+/// use on macOS only when the compiler targets SVE: no Mac's processor has it.
+const AARCH64_ASM: &[&str] = &[
+    "bitstream-a.S",
+    "cabac-a.S",
+    "dct-a.S",
+    "deblock-a.S",
+    "mc-a.S",
+    "pixel-a.S",
+    "predict-a.S",
+    "quant-a.S",
+];
 
 /// What x264.h includes to know how the library was built.
 const X264_CONFIG: &str = "#define X264_GPL           1
@@ -96,10 +115,16 @@ fn main() {
     if target.x86_64 {
         per_depth.files(X86_C.iter().map(|file| root.join(file)));
     }
+    if target.neon() {
+        per_depth.files(AARCH64_C.iter().map(|file| root.join(file)));
+    }
     per_depth.files(PER_DEPTH.iter().map(|file| root.join(file)));
     objects.extend(per_depth.compile_intermediates());
     if target.x86_64 {
         objects.extend(assemble(&root, &out, &target));
+    }
+    if target.neon() {
+        objects.extend(assemble_aarch64(&root, &include));
     }
     cc::Build::new().objects(objects).compile("x264");
     if target.os == "linux" {
@@ -185,10 +210,28 @@ fn assemble(root: &Path, out: &Path, target: &Target) -> Vec<PathBuf> {
     objects
 }
 
+/// Assembles common/aarch64's assembly with the C compiler, as configure
+/// has it for macOS: with `_` before each symbol (`PREFIX`) and
+/// position-independent addressing (`PIC`). Returns the objects.
+fn assemble_aarch64(root: &Path, include: &Path) -> Vec<PathBuf> {
+    let aarch64 = root.join("common/aarch64");
+    cc::Build::new()
+        // config.h, which asm.S includes.
+        .include(include)
+        .warnings(false)
+        .define("PREFIX", None)
+        .define("PIC", None)
+        .define("HIGH_BIT_DEPTH", "0")
+        .define("BIT_DEPTH", "8")
+        .files(AARCH64_ASM.iter().map(|file| aarch64.join(file)))
+        .compile_intermediates()
+}
+
 /// What x264's configure would find out about the target.
 struct Target {
     os: String,
     x86_64: bool,
+    aarch64: bool,
     /// Microsoft's compiler or clang-cl, without GCC's extensions.
     msvc: bool,
 }
@@ -199,8 +242,15 @@ impl Target {
         Self {
             os: var("CARGO_CFG_TARGET_OS"),
             x86_64: var("CARGO_CFG_TARGET_ARCH") == "x86_64",
+            aarch64: var("CARGO_CFG_TARGET_ARCH") == "aarch64",
             msvc: var("CARGO_CFG_TARGET_ENV") == "msvc",
         }
+    }
+
+    /// Whether x264's Arm assembly is built: on Apple silicon. Other Arm
+    /// systems get its plain C.
+    fn neon(&self) -> bool {
+        self.aarch64 && self.os == "macos"
     }
 
     /// config.h as configure writes it. Transparent huge pages stay off:
@@ -208,14 +258,19 @@ impl Target {
     fn config_h(&self) -> String {
         let linux = self.os == "linux";
         let windows = self.os == "windows";
+        let macos = self.os == "macos";
         let gnu = !self.msvc;
         let mut defines = vec![
             ("HAVE_MALLOC_H", u8::from(linux)),
             ("HAVE_X86_INLINE_ASM", u8::from(self.x86_64 && gnu)),
             ("HAVE_MMX", u8::from(self.x86_64)),
             ("ARCH_X86_64", u8::from(self.x86_64)),
+            ("HAVE_AARCH64", u8::from(self.neon())),
+            ("HAVE_NEON", u8::from(self.neon())),
+            ("ARCH_AARCH64", u8::from(self.aarch64)),
             ("SYS_LINUX", u8::from(linux)),
             ("SYS_WINDOWS", u8::from(windows)),
+            ("SYS_MACOSX", u8::from(macos)),
             ("HAVE_POSIXTHREAD", u8::from(!windows)),
             ("HAVE_WIN32THREAD", u8::from(windows)),
             ("HAVE_THREAD", 1),
@@ -239,8 +294,6 @@ impl Target {
             "HAVE_ALTIVEC_H",
             "HAVE_ARMV6",
             "HAVE_ARMV6T2",
-            "HAVE_NEON",
-            "HAVE_AARCH64",
             "HAVE_BEOSTHREAD",
             "HAVE_SWSCALE",
             "HAVE_LAVF",

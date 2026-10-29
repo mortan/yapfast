@@ -231,9 +231,10 @@ The shared screen's sound comes through a Core Audio process tap, which
 needs System Audio Recording, part of the same setting; see the sound above.
 The video goes to VideoToolbox's hardware encoder ([On macOS](#on-macos));
 x264 encodes only when "Encode streams with the GPU" is off or VideoToolbox
-fails. x264 is built without its Arm assembly there, and still keeps up to
-1080p60 at either effort; at the screen's own size, 1440p keeps 30 fps, and
-4K only without "Higher quality". Nothing caps it.
+fails. x264 is built with its Arm (NEON) assembly there, and keeps up to
+1080p60 at either effort; at the screen's own size, 1440p keeps 60 fps
+without "Higher quality" and 30 with it, and 4K keeps 30 fps only without
+it. Nothing caps it.
 
 ## Choosing the H264 encoder
 
