@@ -13,8 +13,9 @@ const LOCK: &str = "instance.lock";
 const SOCKET: &str = "instance.socket";
 
 /// How long a later start keeps trying to reach the first, which may still
-/// be starting, or restarting with another renderer.
-const PATIENCE: Duration = Duration::from_secs(5);
+/// be starting, or restarting with another renderer; in tests, long enough
+/// for a first that's there.
+const PATIENCE: Duration = Duration::from_millis(if cfg!(test) { 500 } else { 5000 });
 const RETRY: Duration = Duration::from_millis(100);
 
 /// What this start of Yapfast goes on to do.
@@ -30,8 +31,10 @@ pub enum Start {
 /// A running Yapfast's hold on its folder, while it's the first there.
 #[derive(Default)]
 pub struct Instance {
-    _lock: Option<File>,
+    /// Before the lock, so it goes first: once the lock is let go, the next
+    /// start may make a socket of its own at the same path.
     listener: Option<Listener>,
+    _lock: Option<File>,
 }
 
 /// Starts Yapfast on `root`. With another running there and `alone`, hands
@@ -142,9 +145,13 @@ fn ask(root: &Path, token: Option<&str>) -> std::io::Result<()> {
 
 /// The socket's path: beside the lock where it fits a socket's address, which
 /// takes 103 bytes on macOS and 107 on Linux, or else named by a hash of the
-/// folder in a short folder of the user's own.
+/// folder in a short folder of the user's own. Both go by the folder's
+/// canonical path, so that any path to it, as its lock is, gives the same.
 #[cfg(unix)]
 fn socket(root: &Path) -> std::path::PathBuf {
+    let root = std::fs::canonicalize(root)
+        .or_else(|_| std::path::absolute(root))
+        .unwrap_or_else(|_| root.to_owned());
     let beside = root.join(SOCKET);
     if beside.as_os_str().len() < 104 {
         return beside;
@@ -153,8 +160,6 @@ fn socket(root: &Path) -> std::path::PathBuf {
         return beside;
     };
     use std::os::unix::ffi::OsStrExt;
-    // The same folder by any path, as its lock is.
-    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
     let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a
     for byte in root.as_os_str().as_bytes() {
         hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
@@ -198,8 +203,17 @@ fn short_folder() -> Option<std::path::PathBuf> {
         .map(Into::into)
 }
 
+/// The socket, removed when this drops, as one in the user's short folder
+/// would otherwise stay there for good.
 #[cfg(unix)]
-struct Listener(Option<std::os::unix::net::UnixListener>);
+struct Listener(Option<std::os::unix::net::UnixListener>, std::path::PathBuf);
+
+#[cfg(unix)]
+impl Drop for Listener {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.1);
+    }
+}
 
 #[cfg(unix)]
 impl Listener {
@@ -209,7 +223,7 @@ impl Listener {
         // gone Yapfast's.
         let _ = std::fs::remove_file(&path);
         match std::os::unix::net::UnixListener::bind(&path) {
-            Ok(listener) => Some(Self(Some(listener))),
+            Ok(listener) => Some(Self(Some(listener), path)),
             Err(error) => {
                 tracing::warn!(%error, "starting Yapfast again can't show this window");
                 None
@@ -560,13 +574,24 @@ mod tests {
         };
         let path = socket(&root);
         assert!(root.join(SOCKET).as_os_str().len() >= 104);
+        // Without a short folder, as on Linux without XDG_RUNTIME_DIR, it
+        // stays beside the lock, and binding it fails.
+        if short_folder().is_none() {
+            return;
+        }
         assert!(!path.starts_with(&root) && path.as_os_str().len() < 104);
+        assert!(path.exists());
         let requests = opened(&mut first);
         assert!(matches!(
             claim_with(&root, true, false, None),
             Start::Handed
         ));
         assert_eq!(requests.recv_timeout(Duration::from_secs(5)).unwrap(), None);
+        // Any path to the folder reaches it.
+        let around = root.join("..").join(root.file_name().unwrap());
+        assert_eq!(socket(&around), path);
+        drop(first);
+        assert!(!path.exists(), "the socket goes with the first");
 
         let Start::Run(mut second) = claim_with(parent.path(), true, false, None) else {
             panic!("another folder runs");
