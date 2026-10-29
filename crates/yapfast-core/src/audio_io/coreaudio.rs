@@ -40,7 +40,8 @@ const RECORDING: Duration = Duration::from_millis(200);
 /// What a converter takes from the ring at a time.
 const CONVERTED: Duration = Duration::from_millis(20);
 /// A running unit calls back every few milliseconds; this long without a
-/// call means its device went away.
+/// call, or with calls that bring no samples, means its device went away or
+/// fails.
 const SILENCE: Duration = Duration::from_secs(2);
 /// How WebRTC's device module names the default device.
 const DEFAULT: &str = "default";
@@ -684,15 +685,15 @@ impl Wake {
     }
 
     /// Waits until `ready`, or for the next call back; false if none came
-    /// for [`SILENCE`].
-    fn wait(&self, ready: impl Fn() -> bool) -> bool {
+    /// for `patience`.
+    fn wait(&self, ready: impl Fn() -> bool, patience: Duration) -> bool {
         self.waiting.store(true, Ordering::SeqCst);
         if ready() {
             return true;
         }
         // SAFETY: as above.
         unsafe {
-            let deadline = sys::dispatch_time(0, SILENCE.as_nanos() as i64);
+            let deadline = sys::dispatch_time(0, patience.as_nanos() as i64);
             sys::dispatch_semaphore_wait(self.semaphore, deadline) == 0
         }
     }
@@ -823,7 +824,10 @@ impl Output {
                 // Full: it plays once it has all it may queue.
                 self.unit.start()?;
                 let room = || ring.len() < ring.capacity();
-                ensure!(self.playing.wake.wait(room), "the speakers stopped playing");
+                ensure!(
+                    self.playing.wake.wait(room, SILENCE),
+                    "the speakers stopped playing"
+                );
             }
         }
         Ok(())
@@ -839,7 +843,7 @@ impl Output {
         while ring.len() > 0 {
             ensure!(Instant::now() < deadline, "the speakers stopped playing");
             ensure!(
-                self.playing.wake.wait(|| ring.len() == 0),
+                self.playing.wake.wait(|| ring.len() == 0, SILENCE),
                 "the speakers stopped playing"
             );
         }
@@ -929,10 +933,17 @@ impl Recording {
         Ok(())
     }
 
-    /// Waits until something's in the ring.
+    /// Waits until something's in the ring; fails once nothing came for
+    /// [`SILENCE`], whether the device stopped calling back or calls back
+    /// without samples, as when rendering fails each time.
     fn wait(&self) -> Result<()> {
+        let deadline = Instant::now() + SILENCE;
         while self.ring.len() == 0 {
-            ensure!(self.wake.wait(|| self.ring.len() > 0), self.stopped);
+            let patience = deadline.saturating_duration_since(Instant::now());
+            ensure!(
+                !patience.is_zero() && self.wake.wait(|| self.ring.len() > 0, patience),
+                self.stopped
+            );
         }
         Ok(())
     }
@@ -1170,6 +1181,46 @@ mod tests {
         ring.push(&[1, 2]);
         ring.clear();
         assert_eq!(ring.len(), 0);
+    }
+
+    /// A device that keeps calling back without samples fails the reader,
+    /// as one that stopped calling back does.
+    #[test]
+    fn a_microphone_that_records_nothing_fails() {
+        struct Calling<'a>(&'a Wake);
+        // SAFETY: a semaphore and an atomic, which any thread may signal.
+        unsafe impl Sync for Calling<'_> {}
+        impl Calling<'_> {
+            fn back(&self) {
+                self.0.signal();
+            }
+        }
+        let recording = Recording {
+            unit: ptr::null_mut(),
+            ring: Ring::new(64),
+            wake: Wake::new(),
+            rendered: UnsafeCell::new(Box::new([])),
+            channels: 1,
+            frame: 2,
+            stopped: "the microphone stopped",
+        };
+        let calling = Calling(&recording.wake);
+        let done = AtomicBool::new(false);
+        let started = Instant::now();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                while !done.load(Ordering::Relaxed) {
+                    calling.back();
+                    std::thread::sleep(Duration::from_millis(5));
+                }
+            });
+            let mut bytes = [0; 4];
+            let error = recording.take(&mut bytes).unwrap_err();
+            done.store(true, Ordering::Relaxed);
+            assert_eq!(error.to_string(), "the microphone stopped");
+        });
+        assert!(started.elapsed() >= SILENCE);
+        assert!(started.elapsed() < SILENCE * 2);
     }
 
     /// A microphone at 16 kHz read at 48 kHz: the converter takes what the

@@ -216,7 +216,8 @@ sink's or source's name with its index, which a device gets anew each time
 it comes back, so even a short gap brings the stream back. On Windows it's
 the endpoint id, the default's while the chosen device is gone, so the
 default also follows Windows when it changes; macOS works the same way with
-the device's Core Audio UID. While nothing opens, the
+the device's Core Audio UID. A Core Audio microphone that brings no
+samples for 2 s fails. While nothing opens, the
 stream keeps time with silence and tries again every half second. Settings
 show a chosen device that isn't connected last in its list, as "(not
 connected)", by the name it was last listed with; the call plays on the
