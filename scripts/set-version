@@ -15,14 +15,26 @@ if ! [[ $version =~ ^$number\.$number\.$number(-$part(\.$part)*)?$ ]]; then
   echo "scripts/set-version: $version isn't a SemVer version" >&2
   exit 2
 fi
+# Replaces the lines of FILE that match PATTERN, a Python regular expression,
+# with REPLACEMENT, or only the first COUNT of them: sed's in-place editing
+# and first-match address differ between GNU and macOS.
+replace() {
+  python3 -c 'import re, sys
+from pathlib import Path
+path, pattern, replacement, count = Path(sys.argv[1]), sys.argv[2], sys.argv[3], int(sys.argv[4])
+text = path.read_text(encoding="utf-8")
+path.write_text(re.sub(pattern, replacement, text, count=count, flags=re.MULTILINE), encoding="utf-8")' \
+    "$1" "$2" "$3" "${4:-0}"
+}
 # The package's version is the manifest's first; the lockfile's follows its name.
-sed -i "0,/^version = /s/^version = .*/version = \"$version\"/" Cargo.toml
-sed -i "/^name = \"yapfast\"$/{n;s/^version = .*/version = \"$version\"/}" Cargo.lock
+replace Cargo.toml '^version = .*' "version = \"$version\"" 1
+replace Cargo.lock '^(name = "yapfast"\nversion = ).*' "\\g<1>\"$version\""
 # A pkgver can't hold a prerelease's "-", and nightlies don't build from a tag.
 if [[ $version != *-* ]]; then
-  sed -i -e "s/^pkgver=.*/pkgver=$version/" -e "s/^pkgrel=.*/pkgrel=1/" packaging/arch/PKGBUILD
+  replace packaging/arch/PKGBUILD '^pkgver=.*' "pkgver=$version"
+  replace packaging/arch/PKGBUILD '^pkgrel=.*' pkgrel=1
   metainfo=packaging/linux/io.github.yapfast.Yapfast.metainfo.xml
   if ! grep -q "<release version=\"$version\"" "$metainfo"; then
-    sed -i "s|^  <releases>$|&\n    <release version=\"$version\" date=\"$(date +%F)\"/>|" "$metainfo"
+    replace "$metainfo" '^  <releases>$' "\\g<0>\n    <release version=\"$version\" date=\"$(date +%F)\"/>"
   fi
 fi
