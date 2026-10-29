@@ -87,6 +87,8 @@ def newest_input(dep_info):
 def check_executable(executable, flavour, build_script):
     """Stops unless executable is a release build of flavour from the current
     source, built as build_script builds it."""
+    if not executable.is_file():
+        raise SystemExit(f"There's no {executable}; run {build_script} first")
     # Cargo writes the dep-info beside the executable it builds.
     dep_info = executable.with_suffix(".d")
     if not dep_info.is_file() or executable.stat().st_mtime < newest_input(dep_info):
