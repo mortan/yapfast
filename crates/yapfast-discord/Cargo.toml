@@ -48,7 +48,7 @@ url.workspace = true
 webrtc-sys = "=0.3.35"
 
 # The Rich Presence socket's lock opens with O_NOFOLLOW, whose value differs
-# from one processor to another.
+# from one processor to another; glibc's heap is measured and trimmed too.
 [target.'cfg(target_os = "linux")'.dependencies]
 libc = "0.2.189"
 

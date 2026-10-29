@@ -247,11 +247,8 @@ async fn connected_session(
 fn trim_startup_heap() {
     #[cfg(all(target_os = "linux", target_env = "gnu"))]
     {
-        unsafe extern "C" {
-            fn malloc_trim(pad: usize) -> std::ffi::c_int;
-        }
         // SAFETY: malloc_trim only returns unused allocator pages to the OS.
-        unsafe { malloc_trim(0) };
+        unsafe { libc::malloc_trim(0) };
     }
     #[cfg(target_os = "macos")]
     {
