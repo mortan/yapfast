@@ -6,27 +6,8 @@
 //! sound, and what asks macOS about screen capture.
 
 fn main() {
-    for file in [
-        "vp8.c",
-        "h264.c",
-        "clip.c",
-        "decode.c",
-        "video.c",
-        "picture.c",
-        "camera.cc",
-        "camera_mac.m",
-        "tap_mac.m",
-        "capture_mac.c",
-        "hwenc.c",
-        "hevc.c",
-        "vtdec.c",
-        "vtenc.c",
-        "vtdec.h",
-        "aacdec.c",
-        "aacdec.h",
-    ] {
-        println!("cargo:rerun-if-changed=native/{file}");
-    }
+    // Cargo looks through the folder, so a file added there counts too.
+    println!("cargo:rerun-if-changed=native");
     let include = webrtc_sys_build::webrtc_dir().join("include");
     let third_party = include.join("third_party");
     cc::Build::new()
@@ -86,17 +67,42 @@ fn main() {
     if std::env::var_os("CARGO_FEATURE_DISCORD").is_none() {
         return;
     }
+    let mut codecs = cc::Build::new();
     // libwebrtc's macOS FFmpeg decodes neither H264 nor H265, and
     // ffmpeg-src builds no encoders there, so VideoToolbox decodes and
     // encodes: decode.c's and video.c's H264, vtdec.c's H265 in place of
     // hevc.c's, and vtenc.c in place of hwenc.c. Nor AAC, which AudioToolbox
     // decodes for video.c, in aacdec.c. webrtc-sys links the frameworks
     // already; they're named for these files' own calls.
-    let videotoolbox = target_os == "macos";
-    // FFmpeg's hardware encoders and HEVC decoder, where ffmpeg-src builds
-    // them: hwenc.c and hevc.c see only their headers, with FFmpeg's names
-    // prefixed as in the library.
-    if !videotoolbox && std::env::var("DEP_FFMPEG_ENCODERS").as_deref() == Ok("1") {
+    if target_os == "macos" {
+        codecs
+            .file("native/vtdec.c")
+            .file("native/vtenc.c")
+            .file("native/aacdec.c")
+            // Screen capture's permission, and Yapfast's own windows, which
+            // the share menu leaves out.
+            .file("native/capture_mac.c");
+        // Go Live's sound: a process tap, whose description is an
+        // Objective-C object.
+        cc::Build::new()
+            .file("native/tap_mac.m")
+            .flag("-fobjc-arc")
+            .warnings(true)
+            .compile("yapfast_tap");
+        println!("cargo:rustc-cfg=hwenc");
+        println!("cargo:rustc-cfg=hevcdec");
+        for framework in [
+            "VideoToolbox",
+            "AudioToolbox",
+            "CoreGraphics",
+            "CoreFoundation",
+        ] {
+            println!("cargo:rustc-link-lib=framework={framework}");
+        }
+    } else if std::env::var("DEP_FFMPEG_ENCODERS").as_deref() == Ok("1") {
+        // FFmpeg's hardware encoders and HEVC decoder, where ffmpeg-src
+        // builds them: hwenc.c and hevc.c see only their headers, with
+        // FFmpeg's names prefixed as in the library.
         let mut ffmpeg = cc::Build::new();
         ffmpeg
             .file("native/hwenc.c")
@@ -115,35 +121,6 @@ fn main() {
         println!("cargo:rustc-cfg=hwenc");
         println!("cargo:rustc-cfg=hevcdec");
     }
-    // Go Live's sound on macOS: a process tap, whose description is an
-    // Objective-C object.
-    if target_os == "macos" {
-        cc::Build::new()
-            .file("native/tap_mac.m")
-            .flag("-fobjc-arc")
-            .warnings(true)
-            .compile("yapfast_tap");
-        // Screen capture's permission, and Yapfast's own windows, which
-        // the share menu leaves out.
-        cc::Build::new()
-            .file("native/capture_mac.c")
-            .warnings(true)
-            .compile("yapfast_capture");
-        println!("cargo:rustc-link-lib=framework=CoreGraphics");
-    }
-    if videotoolbox {
-        println!("cargo:rustc-cfg=hwenc");
-        println!("cargo:rustc-cfg=hevcdec");
-        for framework in [
-            "VideoToolbox",
-            "AudioToolbox",
-            "CoreMedia",
-            "CoreVideo",
-            "CoreFoundation",
-        ] {
-            println!("cargo:rustc-link-lib=framework={framework}");
-        }
-    }
     let os = match target_os.as_str() {
         "windows" => "win",
         "macos" => "mac",
@@ -153,13 +130,6 @@ fn main() {
         Ok("aarch64") => "arm64",
         _ => "x64",
     };
-    let mut codecs = cc::Build::new();
-    if videotoolbox {
-        codecs
-            .file("native/vtdec.c")
-            .file("native/vtenc.c")
-            .file("native/aacdec.c");
-    }
     codecs
         .file("native/vp8.c")
         .file("native/h264.c")

@@ -224,7 +224,7 @@ mod mac {
     unsafe extern "C" {
         fn yapfast_screen_recording_allowed() -> std::ffi::c_int;
         fn yapfast_ask_for_screen_recording();
-        fn yapfast_windows_of(pid: std::ffi::c_int, ids: *mut u32, capacity: usize) -> usize;
+        fn yapfast_own_windows(ids: *mut u32, capacity: usize) -> usize;
     }
 
     /// Whether macOS lets Yapfast record the screen: the app responsible for
@@ -242,11 +242,10 @@ mod mac {
 
     /// The ids of this process's windows, as libwebrtc lists windows.
     pub fn own_windows() -> Vec<u64> {
-        let pid = std::process::id() as std::ffi::c_int;
         let mut ids = vec![0u32; 16];
         loop {
             // SAFETY: `ids` holds `ids.len()` ids for it to write.
-            let count = unsafe { yapfast_windows_of(pid, ids.as_mut_ptr(), ids.len()) };
+            let count = unsafe { yapfast_own_windows(ids.as_mut_ptr(), ids.len()) };
             if count <= ids.len() {
                 ids.truncate(count);
                 return ids.into_iter().map(u64::from).collect();
