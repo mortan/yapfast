@@ -90,7 +90,7 @@ use linux as platform;
 #[cfg(target_os = "macos")]
 use macos as platform;
 #[cfg(target_os = "macos")]
-pub use macos::show_in_dock;
+pub use macos::{hidden_start, show_in_dock};
 #[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
 use none as platform;
 #[cfg(windows)]
@@ -832,6 +832,22 @@ mod macos {
                 b"logo" | b"rlgo" | b"rrst" | b"rsdn" | b"rest" | b"shut"
             )
         })
+    }
+
+    /// winit's event loop for a start in the menu bar, as at sign-in: an
+    /// accessory app as launching finishes, which winit activates only if no
+    /// other app is active, rather than taking the focus from the app the
+    /// person is in.
+    pub fn hidden_start() -> slint::winit_030::EventLoopBuilder {
+        use slint::winit_030::winit::{
+            event_loop::EventLoop,
+            platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS},
+        };
+        let mut builder = EventLoop::with_user_event();
+        builder
+            .with_activation_policy(ActivationPolicy::Accessory)
+            .with_activate_ignoring_other_apps(false);
+        builder
     }
 
     /// The Dock icon and the app menu while the window shows; with it closed,

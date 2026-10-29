@@ -112,6 +112,9 @@ pub fn run(
     };
     decode_into_slint_buffers();
     pictures::make_frames_in_slint_buffers();
+    // Started at sign-in, Yapfast goes to the tray with the saved session.
+    // Without one there's nothing to do there but sign in, which needs the window.
+    let hidden = background && !preview && yapfast_core::chat::can_restore(&root);
     // Request the graphics API explicitly so Slint cannot silently replace a
     // failed GPU surface; Yapfast owns the fallback and tells the user about it.
     // Windows draws the GPU setting with Direct3D 12; see [`graphics`].
@@ -126,6 +129,11 @@ pub fn run(
             selector.renderer_name("skia-software".into()),
             "skia-software",
         ),
+    };
+    #[cfg(target_os = "macos")]
+    let selector = match hidden {
+        true => selector.with_winit_event_loop_builder(crate::tray::hidden_start()),
+        false => selector,
     };
     selector
         .with_winit_window_attributes_hook(|attributes| {
@@ -144,9 +152,6 @@ pub fn run(
             Err(anyhow::Error::new(error).context(context))
         }
     };
-    // Started at sign-in, Yapfast goes to the tray with the saved session.
-    // Without one there's nothing to do there but sign in, which needs the window.
-    let hidden = background && !preview && yapfast_core::chat::can_restore(&root);
     // Before the window maps, as the desktop looks up its icon then.
     #[cfg(target_os = "linux")]
     if !preview {

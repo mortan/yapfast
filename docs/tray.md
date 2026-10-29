@@ -184,7 +184,10 @@ While the window shows, Yapfast is a regular app, with a Dock icon and its
 menu bar. Closed to the menu bar, it's an accessory app with neither, so the
 Dock offers no app with nothing to show; opening the window, from the menu,
 a notification or a later start, makes it regular again and brings it
-forward.
+forward. Started in the menu bar, as at sign-in, it's an accessory app
+before launching finishes, and winit, which would make it the active app,
+activates it only if no other app is: the person keeps the focus, and the
+Dock doesn't show Yapfast for a moment.
 
 winit's application delegate leaves quitting and reopening to AppKit, so
 Yapfast adds two methods to its class as the icon starts.

@@ -91,6 +91,10 @@ impl Shell {
             Some(tray) => cfg!(any(windows, target_os = "macos")) && !tray.available(),
         };
         if missing {
+            // Once winit has made Yapfast the accessory app `hidden_start`
+            // asked for, as it finishes launching.
+            #[cfg(target_os = "macos")]
+            slint::Timer::single_shot(Duration::ZERO, || crate::tray::show_in_dock(true));
             self.show_first();
             return;
         }
@@ -98,9 +102,10 @@ impl Shell {
             self.adapter.borrow_mut().detach();
             drop(window);
         }
-        // Once winit has made Yapfast a regular app, as it finishes launching.
+        // Before launching finishes, so the Dock doesn't show Yapfast while
+        // it does; winit keeps the policy `hidden_start` gave it.
         #[cfg(target_os = "macos")]
-        slint::Timer::single_shot(Duration::ZERO, || crate::tray::show_in_dock(false));
+        crate::tray::show_in_dock(false);
         tracing::info!("started in the tray");
         slint::Timer::single_shot(Duration::from_millis(500), release_memory);
     }
