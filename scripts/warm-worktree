@@ -23,12 +23,17 @@ fi
 # Cargo would reuse their copied builds, and a build script that names its
 # inputs by absolute path, as Slint's does, would go on watching the main
 # checkout's files. Cleaning them makes them build from this worktree's.
-# A loop rather than mapfile, which macOS's bash 3.2 lacks.
+# Python rather than jq, which macOS lacks, and a loop rather than mapfile,
+# which macOS's bash 3.2 lacks. Outside a process substitution, a failure
+# ends the script before anything is copied.
+crates=$(cargo metadata --locked --format-version 1 | python3 -c 'import json, sys
+for package in json.load(sys.stdin)["packages"]:
+    if package["source"] is None:
+        print(package["name"])')
 local_crates=()
-while IFS= read -r line; do
-  local_crates+=("$line")
-done < <(cargo metadata --locked --format-version 1 |
-  jq -r '.packages[] | select(.source == null) | "-p\n\(.name)"')
+while IFS= read -r crate; do
+  local_crates+=(-p "$crate")
+done <<<"$crates"
 
 # Reflinks, as macOS's cp makes them: APFS clones.
 reflink=(--reflink=always) reflink_auto=(--reflink=auto)
@@ -37,14 +42,6 @@ if [[ $(uname) == Darwin ]]; then
 fi
 
 mkdir -p target
-# Cargo cleans only a target directory that has this tag, which the main
-# checkout's may lack, so it's written here as Cargo writes it.
-if [[ ! -e target/CACHEDIR.TAG ]]; then
-  printf '%s\n' 'Signature: 8a477f597d28d172789f06886806bc55' \
-    '# This file is a cache directory tag created by cargo.' \
-    '# For information about cache directory tags see https://bford.info/cachedir/' \
-    >target/CACHEDIR.TAG
-fi
 for dir in fast check-combinations; do
   if [[ ! -d "$main/target/$dir" ]]; then
     echo "$dir: the main checkout has none"
@@ -54,17 +51,31 @@ for dir in fast check-combinations; do
     echo "$dir: already here"
     continue
   fi
-  if ! cp -a "${reflink[@]}" "$main/target/$dir" "target/$dir.partial"; then
-    rm -rf "target/$dir.partial"
+  # The copy is cleaned in a target directory of its own and moved into place
+  # only then, so a run that fails leaves nothing a second run would skip.
+  # target/fast is the fast profile of target/; scripts/check builds
+  # target/check-combinations/fast.
+  partial=target/$dir.partial
+  copy=$partial
+  [[ "$dir" == fast ]] && copy=$partial/fast
+  rm -rf "$partial"
+  mkdir -p "$(dirname "$copy")"
+  if ! cp -a "${reflink[@]}" "$main/target/$dir" "$copy"; then
+    rm -rf "$partial"
     echo "scripts/warm-worktree: could not reflink $main/target/$dir" >&2
     exit 1
   fi
-  mv "target/$dir.partial" "target/$dir"
-  # target/fast is the fast profile of target/; scripts/check builds
-  # target/check-combinations/fast.
-  target_dir=target
-  [[ "$dir" == fast ]] || target_dir=target/$dir
-  cargo clean --profile fast --target-dir "$target_dir" "${local_crates[@]}"
+  # Cargo cleans only a target directory that has this tag, which the main
+  # checkout's may lack, so it's written here as Cargo writes it.
+  if [[ ! -e "$partial/CACHEDIR.TAG" ]]; then
+    printf '%s\n' 'Signature: 8a477f597d28d172789f06886806bc55' \
+      '# This file is a cache directory tag created by cargo.' \
+      '# For information about cache directory tags see https://bford.info/cachedir/' \
+      >"$partial/CACHEDIR.TAG"
+  fi
+  cargo clean --profile fast --target-dir "$partial" "${local_crates[@]}"
+  mv "$copy" "target/$dir"
+  rm -rf "$partial"
   echo "$dir: copied from $main"
 done
 

@@ -24,7 +24,8 @@ into `~/Library/Caches/yapfast-build`, checks each against its pinned SHA-256,
 and renames Skia's JPEG table with `nix/prepare-skia-native.py`, as the Nix
 shell does on Linux; later runs reuse them without the network.
 `scripts/check`, `scripts/test-fake-discord` and `scripts/warm-worktree`
-start through it on macOS, as they start through `nix develop` on Linux;
+start through it on macOS, as they start through `nix develop` on Linux
+(`scripts/dev-shell`);
 `warm-worktree` makes APFS clones there. What works on a Mac, its
 permissions and the scripts that are Linux-only are in [macOS](macos.md).
 
@@ -328,9 +329,10 @@ every dependency. `scripts/warm-worktree`, run inside it
 before the first build, copies the main checkout's `target/fast/` and
 `target/check-combinations/` as reflinks, which share disk space with the
 originals, and cleans the crates whose sources are in the repository, so those
-build from the worktree's own files. The first check then takes about 3.5
-minutes. Reflinks need a filesystem such as btrfs; on macOS they're APFS
-clones.
+build from the worktree's own files. A copy goes into place only once it's
+cleaned, so after a run that failed, running it again starts over. The first
+check then takes about 3.5 minutes. Reflinks need a filesystem such as
+btrfs; on macOS they're APFS clones.
 
 After a change under `vendor/ffmpeg-src` or `vendor/x264-src`, each check
 step compiles it again; Clippy alone takes about 4 minutes. Run Clippy on the
