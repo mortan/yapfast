@@ -74,7 +74,8 @@ fn main() {
     // hevc.c, and for video.c's H264, and vtenc.c in place of hwenc.c. Nor
     // AAC, which AudioToolbox decodes for video.c, in aacdec.c. webrtc-sys
     // links the frameworks already; they're named for these files' own
-    // calls.
+    // calls. CoreMedia and CoreVideo, which vtdec.c and vtenc.c call too,
+    // are named in the camera's block above, which every macOS build runs.
     if target_os == "macos" {
         codecs
             .file("native/vtdec.c")

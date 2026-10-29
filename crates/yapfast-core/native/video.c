@@ -3,10 +3,13 @@
  * VideoToolbox (vtdec.c), libvpx (VP8, VP9) or dav1d (AV1), and scaled and
  * converted to RGBA by libyuv; sound decoded by libavcodec (AAC, Opus, MP3,
  * Vorbis, FLAC, PCM), or on macOS, whose libavcodec has no AAC decoder, its
- * AAC by AudioToolbox (aacdec.c). All of it is inside Yapfast's libwebrtc archive. The
+ * AAC by AudioToolbox (aacdec.c). The libraries are inside Yapfast's
+ * libwebrtc archive; VideoToolbox and AudioToolbox are macOS's own. The
  * caller supplies the file through two functions, so it can arrive while it
  * plays. Pictures show in 4:2:0, 4:2:2 or 4:4:4 at 8 or 10 bits, or in
- * 4:2:0 at 12, as far as libyuv goes. */
+ * 4:2:0 at 12, as far as libyuv goes, apart from H264 on macOS, which
+ * VideoToolbox decodes only in 8 bits and 4:2:0 (docs/building.md, media
+ * libraries). */
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
