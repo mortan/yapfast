@@ -457,15 +457,19 @@ rules that need arguments. It never reads CPU, memory, environments or
 threads, and drops the process list after each scan. A process seen before and unchanged
 isn't matched again. Wine and Proton processes match by the Windows program
 in their command line, and runtime helpers, crash reporters and anti-cheat
-services don't count. The game started last shows and stays while it runs.
-One that ended clears after two scans without it, up to 30 s. Only the
-game's name, its application id and when it started go to Discord.
+services don't count. On macOS an app matches by its bundle too, the
+`Game.app` around `Game.app/Contents/MacOS/Game`. The game started last
+shows and stays while it runs. One that ended clears after two scans
+without it, up to 30 s. Only the game's name, its application id and when
+it started go to Discord.
 
 Rich Presence comes first, then the custom games, Discord's list and Steam.
 A custom game is an executable and the name to show after Playing: a file
 name matches the executable in any folder, a full path only there, and
-Windows and Wine paths ignore case. Custom games are this device's, kept in
-`layout.json`, and a change rescans at once.
+Windows, Wine and macOS paths ignore case. On macOS an app's bundle,
+`Celeste.app` or `/Applications/Celeste.app`, names the executable inside
+it. Custom games are this device's, kept in `layout.json`, and a change
+rescans at once.
 
 Discord's list comes from
 `https://cdn.discordapp.com/detectables/games-v1.json`, about 4 MB, as

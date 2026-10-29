@@ -214,40 +214,47 @@ struct Detector {
     executables: Vec<(String, Arc<GameInfo>)>,
 }
 
+/// The custom game a process's executable is: a file name matches it in any
+/// folder, a full path only there. Windows and macOS paths ignore case, as
+/// their file systems do, and on macOS an app's bundle, as Finder shows it,
+/// matches the executable inside it.
 fn custom_match(
     entries: &[(String, Arc<GameInfo>)],
     path: &str,
     windows: bool,
 ) -> Option<Arc<GameInfo>> {
+    use std::borrow::Cow;
     if entries.is_empty() {
         return None;
     }
-    let normalize = |s: &str| {
-        let mut path = s.replace('\\', "/").to_lowercase();
-        if path.starts_with("//?/unc/") {
-            path.replace_range(..8, "//");
-        } else if path.starts_with("//?/") {
-            path.drain(..4);
+    fn normalize(s: &str, windows: bool, macos: bool) -> Cow<'_, str> {
+        if windows {
+            let mut path = s.replace('\\', "/").to_lowercase();
+            if path.starts_with("//?/unc/") {
+                path.replace_range(..8, "//");
+            } else if path.starts_with("//?/") {
+                path.drain(..4);
+            }
+            Cow::Owned(path)
+        } else if macos {
+            Cow::Owned(s.trim_end_matches('/').to_lowercase())
+        } else {
+            Cow::Borrowed(s)
         }
-        path
-    };
-    let actual = if windows {
-        std::borrow::Cow::Owned(normalize(path))
-    } else {
-        std::borrow::Cow::Borrowed(path)
-    };
+    }
+    let macos = cfg!(target_os = "macos") && !windows;
+    let actual = normalize(path, windows, macos);
+    let bundle = macos.then(|| catalog::app_bundle(&actual)).flatten();
     entries.iter().find_map(|(executable, game)| {
-        let expected = if windows {
-            std::borrow::Cow::Owned(normalize(executable))
-        } else {
-            std::borrow::Cow::Borrowed(executable.as_str())
+        let expected = normalize(executable, windows, macos);
+        let matches = |actual: &str| {
+            if expected.contains('/') {
+                expected == actual
+            } else {
+                actual.rsplit('/').next() == Some(expected.as_ref())
+            }
         };
-        let matches = if expected.contains('/') {
-            expected == actual
-        } else {
-            actual.rsplit('/').next() == Some(expected.as_ref())
-        };
-        matches.then(|| game.clone())
+        (matches(actual.as_ref()) || bundle.is_some_and(matches)).then(|| game.clone())
     })
 }
 
@@ -592,7 +599,11 @@ mod tests {
         });
         let names = vec![("Game.exe".into(), title.clone())];
         assert!(custom_match(&names, "C:\\Games\\GAME.EXE", true).is_some());
-        assert!(custom_match(&names, "/games/game.exe", false).is_none());
+        assert_eq!(
+            custom_match(&names, "/games/game.exe", false).is_some(),
+            cfg!(target_os = "macos"),
+            "elsewhere case counts"
+        );
         assert!(custom_match(&names, "/games/OtherGame.exe", true).is_none());
         let paths = vec![("C:\\Games\\Game.exe".into(), title.clone())];
         assert!(custom_match(&paths, "\\\\?\\C:\\Games\\GAME.exe", true).is_some());
@@ -602,6 +613,36 @@ mod tests {
         let unix = vec![("/games/game".into(), title)];
         assert!(custom_match(&unix, "/games/game", false).is_some());
         assert!(custom_match(&unix, "/other/games/game", false).is_none());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_custom_games_match_the_app_bundle_in_any_case() {
+        let title = Arc::new(GameInfo {
+            id: None,
+            name: "Celeste".into(),
+        });
+        let executable = "/Applications/Celeste.app/Contents/MacOS/Celeste";
+        for entry in [
+            "Celeste.app",
+            "/Applications/Celeste.app",
+            "/applications/celeste.app/",
+            "celeste",
+            executable,
+        ] {
+            let entries = [(entry.into(), title.clone())];
+            assert!(
+                custom_match(&entries, executable, false).is_some(),
+                "{entry}"
+            );
+        }
+        for entry in ["Other.app", "/Applications/Celeste", "/Games/Celeste.app"] {
+            let entries = [(entry.into(), title.clone())];
+            assert!(
+                custom_match(&entries, executable, false).is_none(),
+                "{entry}"
+            );
+        }
     }
 
     fn found(pid: u32, started: u64, name: &str) -> Found {
