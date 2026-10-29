@@ -50,9 +50,8 @@ Yapfast does on macOS what it does on Linux, apart from what's
   with the GPU" is off or VideoToolbox fails
   ([On macOS](discord/go-live.md#on-macos)). The camera encodes with x264.
 - **Decoding.** VideoToolbox decodes watched H264 and H265 streams and video
-  files' H264, since libwebrtc's FFmpeg on macOS has no H264 decoder. It
-  decodes H264 only in 8 bits and 4:2:0, so 10-bit, 4:2:2 and 4:4:4 H264
-  files don't play. AudioToolbox decodes video files' AAC sound
+  files' H264, and AudioToolbox video files' AAC sound, which libwebrtc's
+  FFmpeg on macOS doesn't decode; less H264 plays than on Linux and Windows
   ([media libraries](building.md#media-libraries)).
 - **Cameras** film through AVFoundation, behind the same C interface as
   libwebrtc's capture module on Linux and Windows

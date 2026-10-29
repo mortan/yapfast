@@ -236,9 +236,10 @@ an error.
   the next ones come at a new size; paused, the one showing is redrawn,
   which moving back to it would hold up while playing. MP4, MOV and WebM
   play, with H264, VP8, VP9 or AV1 pictures in 4:2:0, 4:2:2 or 4:4:4 at
-  8 or 10 bits, or 4:2:0 at 12, and AAC, Opus, MP3, Vorbis or FLAC sound
-  (on macOS, VideoToolbox decodes the H264 and AudioToolbox the AAC);
-  HEVC, which iPhones record, doesn't, as libwebrtc's FFmpeg lacks it.
+  8 or 10 bits, or 4:2:0 at 12, and AAC, Opus, MP3, Vorbis or FLAC sound;
+  on macOS, H264 only in 8 bits and 4:2:0
+  ([media libraries](../building.md#media-libraries)). HEVC, which iPhones
+  record, doesn't play, as libwebrtc's FFmpeg lacks it.
   The file downloads into `discord-videos/` beside the account file, and
   plays as it arrives: the worker's reads wait for the download. It goes
   when the video stops, as when the channel closes. Sound plays on the

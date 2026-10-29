@@ -282,7 +282,8 @@ files named here are in `crates/yapfast-core/native/`.
 - On macOS, VideoToolbox decodes in `vtdec.c`: watched H264 and H265
   streams, which `decode.rs` gives it in place of `decode.c`'s H264 and
   `hevc.c`, and video files' H264 for `video.c`. It decodes H264 only in 8
-  bits and 4:2:0, so 10-bit, 4:2:2 and 4:4:4 H264 files don't play there.
+  bits and 4:2:0, and libwebrtc's FFmpeg there has no H264 decoder to fall
+  back on, so 10-bit, 4:2:2 and 4:4:4 H264 files don't play on macOS.
   VideoToolbox's hardware encoder encodes Go Live's H264 and H265 in
   `vtenc.c`, which gives `hwenc.c`'s interface. AudioToolbox decodes video
   files' AAC sound, LC and HE-AAC v1 and v2, for `video.c`, in `aacdec.c`.
