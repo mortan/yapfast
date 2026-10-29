@@ -121,9 +121,7 @@ The Info.plist names the app `io.github.yapfast.Yapfast`, the Linux app ID,
 and carries the sentences macOS shows when Yapfast first asks for the
 microphone, the camera and other apps' sound (Go Live's, a Core Audio process
 tap). Screen recording, notifications and input monitoring take no sentence.
-Permissions belong to the app that asks: started from the `.app`, Yapfast
-asks for them itself; started from a terminal, macOS asks for the terminal
-([permissions](macos.md#permissions)).
+Which app the permissions belong to: [permissions](macos.md#permissions).
 
 Without an identity, the script signs the bundle ad hoc (`codesign --sign -`),
 which Apple silicon requires of every program, without the hardened runtime,
@@ -144,10 +142,7 @@ its quarantine is removed (`xattr -dr com.apple.quarantine Yapfast.app`).
 resource forks: kept, they'd go in as `._` files, which Archive Utility merges
 back but `unzip` writes into the bundle, where they break its signature.
 
-Opened from Finder or the Dock, Yapfast's output goes to `/dev/null`, so it
-writes its log to `~/Library/Logs/Yapfast/yapfast.log` instead, where Console
-finds it (`src/main.rs`). Run from a terminal, or with its output going to a
-file or pipe, it logs there as on Linux.
+Where the app logs: [macOS](macos.md#build-and-run).
 
 ## Nightly releases
 

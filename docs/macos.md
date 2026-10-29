@@ -117,10 +117,7 @@ anything that needs a permission from a terminal tab outside tmux, or open the
 app. An unbundled binary shows no notifications at all; the framework needs
 a bundle.
 
-macOS ties each permission to the app's signature. An ad hoc signature
-changes with every build, so each new build asks again; to keep the
-permissions across builds, run `scripts/make-macos-signing-identity` once,
-and the build signs with its stable identity from then on
+To keep permissions across builds, sign with a stable identity
 ([signing](packaging.md#macos-app)).
 `tccutil reset All io.github.yapfast.Yapfast` forgets every answer, so macOS
 asks again.
