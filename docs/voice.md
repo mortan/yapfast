@@ -135,7 +135,10 @@ its `uniqueID`, which stays the same across restarts, and its name is the one
 macOS shows. Opening one picks the device format closest to 1280×720 at 30
 frames a second as libwebrtc's module does (the smallest at least that large,
 else the largest), and an `AVCaptureSession` films it in NV12, dropping frames
-that come late. Each frame arrives on the camera's own serial dispatch queue,
+that come late. It films at 30 frames a second, or the nearest rate the format
+allows, such as 29.97 on some capture devices. A device that refuses the
+format or the rate films in its own, and the refusal is logged. Each frame
+arrives on the camera's own serial dispatch queue,
 where libyuv converts it into the same reused I420 buffers and scales it down
 if it's larger, so there's no thread of Yapfast's own. Closing stops the
 session and then waits for the queue, so no picture arrives after it returns.

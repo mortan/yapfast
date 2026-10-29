@@ -158,12 +158,23 @@ static NSArray<AVCaptureDevice *> *cameras(void) {
       .devices;
 }
 
-/* Whether `format` can film at `fps`. */
-static BOOL films_at(AVCaptureDeviceFormat *format, int fps) {
+/* The range of `format` that films at `fps`, give or take half a frame, so
+ * that 29.97 counts as 30; nil when none does. */
+static AVFrameRateRange *films_at(AVCaptureDeviceFormat *format, int fps) {
   for (AVFrameRateRange *range in format.videoSupportedFrameRateRanges) {
-    if (range.minFrameRate <= fps + 0.5 && range.maxFrameRate >= fps - 0.5) return YES;
+    if (range.minFrameRate <= fps + 0.5 && range.maxFrameRate >= fps - 0.5) return range;
   }
-  return NO;
+  return nil;
+}
+
+/* 1/`fps` of a second, or the nearest frame duration `range` allows:
+ * AVFoundation throws at one outside it, such as 1/30 for a capture device
+ * filming at most 29.97 frames a second. */
+static CMTime frame_duration(AVFrameRateRange *range, int fps) {
+  CMTime duration = CMTimeMake(1, fps);
+  if (CMTimeCompare(duration, range.minFrameDuration) < 0) return range.minFrameDuration;
+  if (CMTimeCompare(duration, range.maxFrameDuration) > 0) return range.maxFrameDuration;
+  return duration;
 }
 
 /* The format closest to `width` by `height` at `fps`, as libwebrtc's
@@ -184,7 +195,7 @@ static AVCaptureDeviceFormat *best_format(AVCaptureDevice *device, int width, in
     BOOL nv12 = subtype == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
                 subtype == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange;
     /* Higher is better, compared in order. */
-    int64_t score[4] = {covers, covers ? -area : area, films_at(format, fps), nv12};
+    int64_t score[4] = {covers, covers ? -area : area, films_at(format, fps) != nil, nv12};
     BOOL better = best == nil;
     for (int index = 0; !better && index < 4; index++) {
       if (score[index] != best_score[index]) {
@@ -291,13 +302,17 @@ struct yapfast_camera *yapfast_camera_open(const char *id, int width, int height
     /* The format holds while the device stays locked through startRunning;
      * a session setting its own preset would otherwise replace it. */
     BOOL locked = [device lockForConfiguration:&error];
-    if (locked) {
-      AVCaptureDeviceFormat *format = best_format(device, width, height, fps);
-      if (format) {
+    AVCaptureDeviceFormat *format = locked ? best_format(device, width, height, fps) : nil;
+    if (format) {
+      /* A device that still refuses films in its own format, or at that
+       * format's own rate, rather than ending the app with an exception. */
+      @try {
         device.activeFormat = format;
-        if (films_at(format, fps)) {
-          device.activeVideoMinFrameDuration = CMTimeMake(1, fps);
-        }
+        AVFrameRateRange *range = films_at(format, fps);
+        if (range) device.activeVideoMinFrameDuration = frame_duration(range, fps);
+      } @catch (NSException *exception) {
+        NSLog(@"yapfast: camera %@ can't film %@ at %d a second: %@", device.localizedName,
+              format, fps, exception.reason);
       }
     }
     [session commitConfiguration];
