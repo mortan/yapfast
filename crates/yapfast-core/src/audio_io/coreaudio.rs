@@ -5,7 +5,9 @@
 //! nothing on the IO thread allocates or locks. Playing, the unit converts
 //! the stream's format to the device's. Recording, it converts all but the
 //! rate, so a stream at another rate than the microphone's goes through an
-//! AudioConverter on the reader's thread.
+//! AudioConverter on the reader's thread. When Core Audio says a stream's
+//! device went away, or a microphone's rate changed, the stream fails at
+//! once, as a WASAPI one does, so `lasting.rs` opens it again.
 //!
 //! WebRTC's macOS device module lists the default device first, as
 //! `default`, and the others by their `AudioObjectID` in decimal, a number
@@ -23,7 +25,10 @@ use std::{
     cell::UnsafeCell,
     ffi::{c_char, c_void},
     ptr,
-    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    sync::{
+        Mutex, Once, PoisonError,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -77,6 +82,8 @@ mod sys {
     pub const SAFETY_OFFSET: u32 = code(b"saft");
     pub const BUFFER_FRAME_SIZE: u32 = code(b"fsiz");
     pub const NOMINAL_SAMPLE_RATE: u32 = code(b"nsrt");
+    pub const IS_ALIVE: u32 = code(b"livn");
+    pub const RUN_LOOP: u32 = code(b"rnlp");
     pub const SCOPE_GLOBAL: u32 = code(b"glob");
     pub const SCOPE_INPUT: u32 = code(b"inpt");
     pub const SCOPE_OUTPUT: u32 = code(b"outp");
@@ -162,6 +169,10 @@ mod sys {
         pub data: *mut c_void,
     }
 
+    /// (object, address count, addresses, data)
+    pub type Listener =
+        unsafe extern "C" fn(AudioObjectID, u32, *const PropertyAddress, *mut c_void) -> OSStatus;
+
     /// (converter, packets, buffers, packet descriptions, data)
     pub type ConverterInput = unsafe extern "C" fn(
         AudioConverterRef,
@@ -186,6 +197,26 @@ mod sys {
             qualifier_size: u32,
             qualifier: *const c_void,
             size: *mut u32,
+            data: *mut c_void,
+        ) -> OSStatus;
+        pub fn AudioObjectSetPropertyData(
+            object: AudioObjectID,
+            address: *const PropertyAddress,
+            qualifier_size: u32,
+            qualifier: *const c_void,
+            size: u32,
+            data: *const c_void,
+        ) -> OSStatus;
+        pub fn AudioObjectAddPropertyListener(
+            object: AudioObjectID,
+            address: *const PropertyAddress,
+            listener: Listener,
+            data: *mut c_void,
+        ) -> OSStatus;
+        pub fn AudioObjectRemovePropertyListener(
+            object: AudioObjectID,
+            address: *const PropertyAddress,
+            listener: Listener,
             data: *mut c_void,
         ) -> OSStatus;
     }
@@ -664,6 +695,8 @@ impl Ring {
 struct Wake {
     semaphore: *mut c_void,
     waiting: AtomicBool,
+    /// Set once Core Audio says the device went away.
+    lost: AtomicBool,
 }
 
 impl Wake {
@@ -672,7 +705,19 @@ impl Wake {
             // SAFETY: released when dropped.
             semaphore: unsafe { sys::dispatch_semaphore_create(0) },
             waiting: AtomicBool::new(false),
+            lost: AtomicBool::new(false),
         }
+    }
+
+    fn lost(&self) -> bool {
+        self.lost.load(Ordering::SeqCst)
+    }
+
+    /// From Core Audio's notification thread: the device went away, and
+    /// waiting ends at once.
+    fn lose(&self) {
+        self.lost.store(true, Ordering::SeqCst);
+        self.signal();
     }
 
     /// From the IO thread, after it played or recorded.
@@ -685,17 +730,21 @@ impl Wake {
     }
 
     /// Waits until `ready`, or for the next call back; false if none came
-    /// for `patience`.
+    /// for `patience`, or the device went away.
     fn wait(&self, ready: impl Fn() -> bool, patience: Duration) -> bool {
         self.waiting.store(true, Ordering::SeqCst);
+        if self.lost() {
+            return false;
+        }
         if ready() {
             return true;
         }
         // SAFETY: as above.
-        unsafe {
+        let called = unsafe {
             let deadline = sys::dispatch_time(0, patience.as_nanos() as i64);
             sys::dispatch_semaphore_wait(self.semaphore, deadline) == 0
-        }
+        };
+        called && !self.lost()
     }
 }
 
@@ -703,6 +752,151 @@ impl Drop for Wake {
     fn drop(&mut self) {
         // SAFETY: nothing waits or signals any more.
         unsafe { sys::dispatch_release(self.semaphore) };
+    }
+}
+
+/// The open streams' devices, which Core Audio may take away.
+static WATCHED: Mutex<Watched> = Mutex::new(Watched {
+    streams: Vec::new(),
+    listened: Vec::new(),
+});
+
+struct Watched {
+    streams: Vec<Watcher>,
+    /// The devices [`devices_changed`] listens to. Core Audio calls a
+    /// listener on a thread of its own and doesn't promise that removing one
+    /// waits for a call under way, so a device keeps its listener, which
+    /// needs no data, while it's connected.
+    listened: Vec<AudioObjectID>,
+}
+
+/// A stream's device, the rate it opened at if it can't follow another,
+/// and its wake.
+struct Watcher {
+    device: AudioObjectID,
+    rate: Option<f64>,
+    wake: *const Wake,
+}
+
+// SAFETY: the wake is touched only under `WATCHED`'s lock, which its stream
+// takes to leave before the wake goes.
+unsafe impl Send for Watcher {}
+
+impl Watcher {
+    /// Whether the device went away, or changed a rate the stream can't
+    /// follow; `listed` is every device, when Core Audio says.
+    fn gone(&self, listed: Option<&[AudioObjectID]>) -> bool {
+        listed.is_some_and(|listed| !listed.contains(&self.device))
+            || property::<u32>(self.device, sys::IS_ALIVE, sys::SCOPE_GLOBAL) == Some(0)
+            || self.rate.is_some_and(|rate| {
+                property::<f64>(self.device, sys::NOMINAL_SAMPLE_RATE, sys::SCOPE_GLOBAL)
+                    .is_some_and(|now| now != rate)
+            })
+    }
+}
+
+/// Core Audio says devices came or went, or a watched one died or changed
+/// its rate: the streams whose device is gone fail at once. On Core Audio's
+/// notification thread, which may lock and allocate.
+unsafe extern "C" fn devices_changed(
+    _: AudioObjectID,
+    _: u32,
+    _: *const sys::PropertyAddress,
+    _: *mut c_void,
+) -> OSStatus {
+    let listed = objects(sys::DEVICES);
+    let listed = (!listed.is_empty()).then_some(&listed[..]);
+    let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
+    for watcher in &watched.streams {
+        if watcher.gone(listed) {
+            // SAFETY: the lock keeps the stream, and so its wake, open.
+            unsafe { (*watcher.wake).lose() };
+        }
+    }
+    if let Some(listed) = listed {
+        // One that comes back may come back as the same object.
+        watched.listened.retain(|device| listed.contains(device));
+    }
+    0
+}
+
+/// Has Core Audio call its listeners on a thread of its own, rather than
+/// on the main thread's run loop, which a stream worker doesn't run, as
+/// WebRTC's device module does too, and tell [`devices_changed`] when
+/// devices come or go.
+fn follow_devices() {
+    static FOLLOWING: Once = Once::new();
+    FOLLOWING.call_once(|| {
+        let own_thread: *const c_void = ptr::null();
+        // SAFETY: a value as large as the size says, and a listener that
+        // needs no data.
+        unsafe {
+            sys::AudioObjectSetPropertyData(
+                sys::SYSTEM_OBJECT,
+                &address(sys::RUN_LOOP, sys::SCOPE_GLOBAL),
+                0,
+                ptr::null(),
+                size_of_val(&own_thread) as u32,
+                (&raw const own_thread).cast(),
+            );
+            sys::AudioObjectAddPropertyListener(
+                sys::SYSTEM_OBJECT,
+                &address(sys::DEVICES, sys::SCOPE_GLOBAL),
+                devices_changed,
+                ptr::null_mut(),
+            );
+        }
+    });
+}
+
+/// A stream among the [`WATCHED`], until dropped.
+struct Watch {
+    wake: *const Wake,
+}
+
+impl Watch {
+    /// Fails `wake`'s stream once `device` goes away or, given the `rate`
+    /// it opened at, changes its rate. The stream drops this before the
+    /// wake.
+    fn new(device: AudioObjectID, rate: Option<f64>, wake: &Wake) -> Self {
+        follow_devices();
+        let listen = {
+            let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
+            watched.streams.push(Watcher { device, rate, wake });
+            let listen = !watched.listened.contains(&device);
+            if listen {
+                watched.listened.push(device);
+            }
+            listen
+        };
+        // Not under the lock, which the listener takes.
+        if listen {
+            for selector in [sys::IS_ALIVE, sys::NOMINAL_SAMPLE_RATE] {
+                // SAFETY: a listener that needs no data.
+                unsafe {
+                    sys::AudioObjectAddPropertyListener(
+                        device,
+                        &address(selector, sys::SCOPE_GLOBAL),
+                        devices_changed,
+                        ptr::null_mut(),
+                    )
+                };
+            }
+        }
+        // It may have gone while the stream opened.
+        // SAFETY: as Core Audio would call it.
+        unsafe { devices_changed(device, 0, ptr::null(), ptr::null_mut()) };
+        Self { wake }
+    }
+}
+
+impl Drop for Watch {
+    fn drop(&mut self) {
+        WATCHED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .streams
+            .retain(|watcher| !ptr::eq(watcher.wake, self.wake));
     }
 }
 
@@ -750,8 +944,10 @@ unsafe extern "C" fn play(
 }
 
 pub struct Output {
-    // Dropped first, so the callback has stopped before `playing` goes.
+    // Dropped first, so the callback has stopped, and then nothing
+    // watches the device, before `playing` goes.
     unit: Unit,
+    _watch: Watch,
     playing: Box<Playing>,
     format: Format,
     /// From leaving the ring to being heard.
@@ -807,6 +1003,7 @@ impl Output {
         unit.initialize()?;
         Ok(Self {
             unit,
+            _watch: Watch::new(device, None, &playing.wake),
             playing,
             format,
             device_latency,
@@ -814,6 +1011,7 @@ impl Output {
     }
 
     pub fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        ensure!(!self.playing.wake.lost(), "the speakers went away");
         let frame = self.format.frame_bytes();
         let mut rest = &bytes[..bytes.len() / frame * frame];
         let ring = &self.playing.ring;
@@ -1060,9 +1258,10 @@ unsafe extern "C" fn supply_converter(
 }
 
 pub struct Input {
-    // Runs until dropped, which comes first, so the callback has stopped
-    // before `recording` goes.
+    // Runs until dropped, which comes first, so the callback has stopped,
+    // and then nothing watches the device, before `recording` goes.
     _unit: Unit,
+    _watch: Watch,
     recording: Box<Recording>,
     converter: Option<Converter>,
 }
@@ -1079,6 +1278,7 @@ impl Input {
     ) -> Result<Self> {
         let device = device(microphone, false).context("this microphone is no longer connected")?;
         let mut unit = Unit::new(device, true)?;
+        let nominal = property::<f64>(device, sys::NOMINAL_SAMPLE_RATE, sys::SCOPE_GLOBAL);
         // The unit converts samples and channels, but not the rate.
         let heard: sys::StreamDescription = unit.get(sys::STREAM_FORMAT, sys::UNIT_INPUT, 1)?;
         let rate = if heard.sample_rate > 0.0 {
@@ -1130,15 +1330,20 @@ impl Input {
                 )
             })
             .transpose()?;
+        // A rate that changes from here on fails the stream, which opens
+        // again at the new one.
+        let watch = Watch::new(device, nominal, &recording.wake);
         unit.start()?;
         Ok(Self {
             _unit: unit,
+            _watch: watch,
             recording,
             converter,
         })
     }
 
     pub fn read(&mut self, bytes: &mut [u8]) -> Result<()> {
+        ensure!(!self.recording.wake.lost(), "the microphone went away");
         match &mut self.converter {
             None => self.recording.take(bytes),
             Some(converter) => converter.fill(&self.recording, bytes),
@@ -1221,6 +1426,28 @@ mod tests {
         });
         assert!(started.elapsed() >= SILENCE);
         assert!(started.elapsed() < SILENCE * 2);
+    }
+
+    /// A stream on a device that isn't there, or goes, fails at once, and
+    /// leaves the watched streams when dropped.
+    #[test]
+    fn a_device_that_goes_fails_its_stream_at_once() {
+        if objects(sys::DEVICES).is_empty() {
+            eprintln!("no devices");
+            return;
+        }
+        let wake = Wake::new();
+        let watch = Watch::new(u32::MAX, None, &wake);
+        assert!(wake.lost());
+        assert!(!wake.wait(|| true, SILENCE));
+        drop(watch);
+        let watched = WATCHED.lock().unwrap();
+        assert!(
+            !watched
+                .streams
+                .iter()
+                .any(|watcher| ptr::eq(watcher.wake, &wake))
+        );
     }
 
     /// A microphone at 16 kHz read at 48 kHz: the converter takes what the

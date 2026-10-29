@@ -216,8 +216,12 @@ sink's or source's name with its index, which a device gets anew each time
 it comes back, so even a short gap brings the stream back. On Windows it's
 the endpoint id, the default's while the chosen device is gone, so the
 default also follows Windows when it changes; macOS works the same way with
-the device's Core Audio UID. A Core Audio microphone that brings no
-samples for 2 s fails. While nothing opens, the
+the device's Core Audio UID. A WASAPI stream fails at its next write or read
+once its device goes. A Core Audio one fails at once when Core Audio says
+its device went away (it leaves the device list, or stops being alive) or a
+microphone's rate changed, which the stream can't follow, so it opens again
+at the new rate. On both, 2 s without the device taking or bringing
+samples fails the stream too. While nothing opens, the
 stream keeps time with silence and tries again every half second. Settings
 show a chosen device that isn't connected last in its list, as "(not
 connected)", by the name it was last listed with; the call plays on the

@@ -54,10 +54,6 @@ type IoProc = unsafe extern "C" fn(
     *mut c_void,
 ) -> OSStatus;
 
-/// (object, address count, addresses, data)
-type Listener =
-    unsafe extern "C" fn(AudioObjectID, u32, *const sys::PropertyAddress, *mut c_void) -> OSStatus;
-
 #[link(name = "CoreAudio", kind = "framework")]
 unsafe extern "C" {
     fn AudioDeviceCreateIOProcID(
@@ -69,18 +65,6 @@ unsafe extern "C" {
     fn AudioDeviceDestroyIOProcID(device: AudioObjectID, id: *mut c_void) -> OSStatus;
     fn AudioDeviceStart(device: AudioObjectID, id: *mut c_void) -> OSStatus;
     fn AudioDeviceStop(device: AudioObjectID, id: *mut c_void) -> OSStatus;
-    fn AudioObjectAddPropertyListener(
-        object: AudioObjectID,
-        address: *const sys::PropertyAddress,
-        listener: Listener,
-        data: *mut c_void,
-    ) -> OSStatus;
-    fn AudioObjectRemovePropertyListener(
-        object: AudioObjectID,
-        address: *const sys::PropertyAddress,
-        listener: Listener,
-        data: *mut c_void,
-    ) -> OSStatus;
 }
 
 // native/tap_mac.m
@@ -345,8 +329,11 @@ impl Tap {
                 ),
                 "can't record the tap",
             )?;
+            // The listener is called in a stream worker, which runs no
+            // main run loop, too.
+            super::follow_devices();
             check(
-                AudioObjectAddPropertyListener(
+                sys::AudioObjectAddPropertyListener(
                     sys::SYSTEM_OBJECT,
                     &address(PROCESSES, sys::SCOPE_GLOBAL),
                     processes_changed,
@@ -412,7 +399,7 @@ impl Drop for Tap {
                 AudioDeviceStop(self.objects.device, self.io);
                 AudioDeviceDestroyIOProcID(self.objects.device, self.io);
             }
-            AudioObjectRemovePropertyListener(
+            sys::AudioObjectRemovePropertyListener(
                 sys::SYSTEM_OBJECT,
                 &address(PROCESSES, sys::SCOPE_GLOBAL),
                 processes_changed,
