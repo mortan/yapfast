@@ -28,8 +28,8 @@ use std::{
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
 
 use super::{
-    AudioObjectID, Converter, OSStatus, RECORDING, Recording, Ring, Wake, address, check,
-    description, objects, property, sys,
+    AudioObjectID, CONVERTED, Converter, OSStatus, RECORDING, Recording, Ring, Wake, address,
+    check, description, objects, property, sys,
 };
 use crate::audio_io::{Format, Hear, Heard, RATE, bytes_mut};
 
@@ -315,15 +315,13 @@ impl Tap {
             float: true,
         };
         let at_rate = stereo(rate.round() as u32);
-        let frame = at_rate.frame_bytes();
-        let capacity = at_rate.bytes(RECORDING) / frame * frame;
-        let recording = Box::new(stereo_ring(capacity));
+        let recording = Box::new(stereo_ring(at_rate.bytes(RECORDING)));
         let converter = (at_rate.rate != RATE)
             .then(|| {
                 Converter::new(
                     &description(at_rate, rate),
                     &description(stereo(RATE), f64::from(RATE)),
-                    capacity,
+                    at_rate.bytes(CONVERTED),
                 )
             })
             .transpose()?;
@@ -391,7 +389,7 @@ impl Tap {
             let bytes = bytes_mut(&mut samples);
             match &mut self.converter {
                 None => recording.take(bytes)?,
-                Some(converter) => converter.fill(recording, bytes, 2, recording.frame)?,
+                Some(converter) => converter.fill(recording, bytes)?,
             }
             // Nothing playing: the mixer hears nothing rather than silence.
             if samples.iter().any(|&sample| sample != 0.0) {

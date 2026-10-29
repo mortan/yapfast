@@ -34,6 +34,8 @@ const DEFAULT_QUEUE: Duration = Duration::from_millis(200);
 /// The least a microphone's ring holds, so a reader that's a little late
 /// loses nothing.
 const RECORDING: Duration = Duration::from_millis(200);
+/// What a converter takes from the ring at a time.
+const CONVERTED: Duration = Duration::from_millis(20);
 /// A running unit calls back every few milliseconds; this long without a
 /// call means its device went away.
 const SILENCE: Duration = Duration::from_secs(2);
@@ -927,10 +929,12 @@ struct Converter {
 }
 
 impl Converter {
+    /// Converts `from` to `to`, taking up to `taken` bytes, whole frames,
+    /// from the ring at a time.
     fn new(
         from: &sys::StreamDescription,
         to: &sys::StreamDescription,
-        capacity: usize,
+        taken: usize,
     ) -> Result<Self> {
         let mut converter = ptr::null_mut();
         // SAFETY: plain calls; disposed of when dropped.
@@ -940,19 +944,12 @@ impl Converter {
         )?;
         Ok(Self {
             converter,
-            taken: vec![0; capacity].into_boxed_slice(),
+            taken: vec![0; taken].into_boxed_slice(),
         })
     }
 
-    /// Fills `bytes`, of `channels` with `frame` bytes each, at the
-    /// stream's rate.
-    fn fill(
-        &mut self,
-        recording: &Recording,
-        bytes: &mut [u8],
-        channels: u32,
-        frame: usize,
-    ) -> Result<()> {
+    /// Fills `bytes`, in the recording's format, at the stream's rate.
+    fn fill(&mut self, recording: &Recording, bytes: &mut [u8]) -> Result<()> {
         let mut supply = Supply {
             recording,
             taken: &mut self.taken,
@@ -964,12 +961,12 @@ impl Converter {
             let mut list = sys::BufferList {
                 count: 1,
                 buffers: [sys::Buffer {
-                    channels,
+                    channels: recording.channels,
                     byte_size: rest.len() as u32,
                     data: rest.as_mut_ptr().cast(),
                 }],
             };
-            let mut frames = (rest.len() / frame) as u32;
+            let mut frames = (rest.len() / recording.frame) as u32;
             // SAFETY: the list lends `rest`, and `supply` outlives the call.
             let status = unsafe {
                 sys::AudioConverterFillComplexBuffer(
@@ -984,7 +981,7 @@ impl Converter {
             ensure!(!supply.stopped, recording.stopped);
             check(status, "can't convert the sound's rate")?;
             ensure!(frames > 0, recording.stopped);
-            filled += frames as usize * frame;
+            filled += frames as usize * recording.frame;
         }
         Ok(())
     }
@@ -1074,8 +1071,9 @@ impl Input {
             rate: rate.round() as u32,
             ..format
         };
-        let capacity =
-            (at_rate.bytes((fragment * 4).max(RECORDING)) / frame * frame).max(slice * frame * 2);
+        let capacity = at_rate
+            .bytes((fragment * 4).max(RECORDING))
+            .max(slice * frame * 2);
         let recording = Box::new(Recording {
             unit: unit.unit,
             ring: Ring::new(capacity),
@@ -1100,7 +1098,7 @@ impl Input {
                 Converter::new(
                     &recorded,
                     &description(format, f64::from(format.rate)),
-                    capacity,
+                    at_rate.bytes(CONVERTED),
                 )
             })
             .transpose()?;
@@ -1113,12 +1111,9 @@ impl Input {
     }
 
     pub fn read(&mut self, bytes: &mut [u8]) -> Result<()> {
-        let recording = &self.recording;
         match &mut self.converter {
-            None => recording.take(bytes),
-            Some(converter) => {
-                converter.fill(recording, bytes, recording.channels, recording.frame)
-            }
+            None => self.recording.take(bytes),
+            Some(converter) => converter.fill(&self.recording, bytes),
         }
     }
 }
@@ -1172,12 +1167,12 @@ mod tests {
         let mut converter = Converter::new(
             &description(at(16_000), 16_000.0),
             &description(at(48_000), 48_000.0),
-            recording.ring.capacity(),
+            at(16_000).bytes(CONVERTED),
         )
         .unwrap();
         let mut heard = vec![0u8; at(48_000).bytes(Duration::from_secs(1))];
         for chunk in heard.chunks_mut(960) {
-            converter.fill(&recording, chunk, 1, frame).unwrap();
+            converter.fill(&recording, chunk).unwrap();
         }
         let samples: Vec<i16> = heard
             .chunks_exact(2)
