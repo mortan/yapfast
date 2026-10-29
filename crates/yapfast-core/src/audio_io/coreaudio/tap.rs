@@ -81,7 +81,8 @@ unsafe extern "C" {
     fn AudioDeviceStop(device: AudioObjectID, id: *mut c_void) -> OSStatus;
 }
 
-// native/tap_mac.m
+// native/tap_mac.m, whose other functions need macOS 14.4: they're called
+// only once `yapfast_tap_supported` said yes, in `Tap::open`.
 unsafe extern "C" {
     fn yapfast_tap_supported() -> c_int;
     fn yapfast_tap_open(
@@ -313,6 +314,10 @@ struct Tap {
 
 impl Tap {
     fn open() -> Result<Self> {
+        // SAFETY: a plain call.
+        if unsafe { yapfast_tap_supported() } == 0 {
+            bail!("it needs macOS 14.4 or later");
+        }
         follow_processes()?;
         let excluded = yapfast_processes();
         let mut objects = Objects { tap: 0, device: 0 };
@@ -478,10 +483,6 @@ pub fn others(
     mut heard: Hear,
     stop: Arc<AtomicBool>,
 ) -> Result<JoinHandle<()>> {
-    // SAFETY: a plain call.
-    if unsafe { yapfast_tap_supported() } == 0 {
-        bail!("sharing other applications' sound needs macOS 14.4 or later");
-    }
     let (opened, opening) = mpsc::channel();
     let thread = std::thread::Builder::new()
         .name("yapfast-stream-hear".into())
