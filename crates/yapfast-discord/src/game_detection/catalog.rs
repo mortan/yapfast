@@ -421,19 +421,9 @@ fn arguments_match(args: &[std::ffi::OsString], expected: &str) -> bool {
     command.contains(expected)
 }
 
-/// The first line of the file the CDN's version is kept in. A list kept
-/// without it, by an earlier Yapfast, may hold other platforms' rules than
-/// this one keeps (macOS kept no Windows rules before Wine), so it's
-/// downloaded again at once.
-const VERSION: &str = "2\n";
-
-/// How long ago the list at `path` was fetched, or found unchanged; none
-/// for a list an earlier Yapfast kept.
+/// How long ago the list at `path` was fetched, or found unchanged. A list
+/// an earlier Yapfast kept has another name ([`crate::cache::games_file`]).
 pub(super) fn age(path: &Path) -> Option<Duration> {
-    let version = std::fs::read_to_string(etag_file(path)).ok()?;
-    if !version.starts_with(VERSION) {
-        return None;
-    }
     let modified = std::fs::metadata(path).and_then(|m| m.modified()).ok()?;
     SystemTime::now().duration_since(modified).ok()
 }
@@ -470,7 +460,6 @@ pub(super) async fn refresh(
             .as_deref()
             .filter(|_| revalidate)
             .and_then(|cache| std::fs::read_to_string(etag_file(cache)).ok())
-            .and_then(|etag| Some(etag.strip_prefix(VERSION)?.to_owned()))
             .filter(|etag| !etag.is_empty() && etag.len() <= 256);
         Ok((temp, cache, etag))
     })
@@ -494,11 +483,11 @@ pub(super) async fn refresh(
             }
             GameList::Written(etag) => {
                 let catalog = compact(temp.path(), cache.as_deref())?;
-                if let Some(cache) = &cache {
-                    let version = format!("{VERSION}{}", etag.unwrap_or_default());
-                    if let Err(error) = std::fs::write(etag_file(cache), version) {
-                        tracing::debug!(%error, "could not keep the game list's version");
-                    }
+                // Without it, the list is downloaded whole tomorrow.
+                if let Some(cache) = &cache
+                    && let Err(error) = std::fs::write(etag_file(cache), etag.unwrap_or_default())
+                {
+                    tracing::debug!(%error, "could not keep the game list's version");
                 }
                 Ok(Refreshed::New(catalog))
             }

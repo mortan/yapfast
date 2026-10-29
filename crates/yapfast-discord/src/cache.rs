@@ -199,9 +199,29 @@ fn file() -> Option<PathBuf> {
     lock(&FILE).clone()
 }
 
-/// Public, account-independent game catalogue, stored beside the account cache.
+/// Public, account-independent game catalogue, stored beside the account
+/// cache. Its name carries the version of what Yapfast keeps in it: a list
+/// an earlier Yapfast kept may hold other platforms' rules than this one
+/// keeps (macOS kept no Windows rules before Wine), so it isn't read, and a
+/// new one is downloaded at once.
 pub(crate) fn games_file() -> Option<PathBuf> {
-    Some(file()?.with_file_name("discord-games.json"))
+    Some(file()?.with_file_name(GAMES))
+}
+
+const GAMES: &str = "discord-games-v2.json";
+/// The list and ETag earlier versions kept.
+const OLDER_GAMES: [&str; 2] = ["discord-games.json", "discord-games.etag"];
+
+/// Removes the game lists earlier versions kept beside the account cache.
+pub(crate) fn forget_older_games() {
+    let Some(file) = file() else { return };
+    for name in OLDER_GAMES {
+        match std::fs::remove_file(file.with_file_name(name)) {
+            Ok(()) => tracing::debug!(name, "removed an earlier game list"),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => tracing::debug!(%error, name, "could not remove an earlier game list"),
+        }
+    }
 }
 
 fn pictures() -> Option<PathBuf> {
@@ -835,6 +855,18 @@ mod tests {
             std::env::temp_dir().join(format!("yapfast-discord-cache-{}", std::process::id()));
         std::fs::create_dir_all(&directory).unwrap();
         keep_in(directory.join("discord-account.json"));
+        // The game list an earlier version kept goes; this one's has a name
+        // of its own.
+        for name in OLDER_GAMES {
+            std::fs::write(directory.join(name), "older").unwrap();
+        }
+        forget_older_games();
+        assert!(
+            OLDER_GAMES
+                .iter()
+                .all(|name| !directory.join(name).exists())
+        );
+        assert_eq!(games_file(), Some(directory.join(GAMES)));
         assert!(
             load("token", Some(KEY)).snapshot.servers.is_empty(),
             "nothing yet"

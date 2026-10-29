@@ -476,9 +476,10 @@ Discord's list comes from
 `https://cdn.discordapp.com/detectables/games-v1.json`, about 4 MB, as
 Discord's desktop client fetches it. Yapfast keeps this platform's
 executables (on Linux and macOS, Windows' too, for Wine) and the Steam ids in
-`discord-games.json` beside the account cache, which accounts share, and the
-CDN's ETag in `discord-games.etag`, after a line with the version of what
-Yapfast keeps: a list an earlier version kept is downloaded again at once. It
+`discord-games-v2.json` beside the account cache, which accounts share, and
+the CDN's ETag in `discord-games-v2.etag`. The name carries the version of
+what Yapfast keeps: the list an earlier version kept, `discord-games.json`,
+is removed, and a new one downloaded at once. It
 asks again a day later with the ETag, so an unchanged list costs a 304; a
 failed download keeps the old list and tries again an hour later. Memory holds only a hash of each
 executable's file name. A process whose name has one has the file read again

@@ -63,6 +63,7 @@ async fn run(
         .or_else(crate::cache::games_file);
     let path = custom.clone().or_else(|| cache.clone());
     let (initial, age) = tokio::task::spawn_blocking(move || {
+        crate::cache::forget_older_games();
         let age = path.as_deref().and_then(catalog::age);
         let catalog = path.as_ref().and_then(|p| match Catalog::read(p) {
             Ok(catalog) => Some(catalog),
