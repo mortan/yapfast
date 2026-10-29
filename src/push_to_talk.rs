@@ -149,7 +149,6 @@ pub enum Reach {
     Asking,
     /// In every app; with the shortcut the desktop gave it, in its own
     /// words, when it says.
-    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
     Everywhere(Option<String>),
     /// Only while Yapfast's window has the focus, for this reason, which
     /// the note goes on from.
@@ -161,13 +160,10 @@ impl Reach {
     pub fn note(&self) -> String {
         match self {
             Reach::Asking => "Asking your desktop to let Yapfast use the key in every app...".into(),
-            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             Reach::Everywhere(None) => "Hold the key in any app to talk.".into(),
-            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             Reach::Everywhere(Some(shortcut)) if shortcut.is_empty() => {
                 "Your desktop hasn't allowed this shortcut yet. Approve it in your system's global shortcuts settings.".into()
             }
-            #[cfg(any(target_os = "linux", target_os = "macos", windows))]
             Reach::Everywhere(Some(shortcut)) => format!(
                 "Your desktop gave push to talk the shortcut {shortcut}. Hold it in any app to talk; change it in your system's global shortcuts settings."
             ),
@@ -205,13 +201,16 @@ pub fn window_event(event: &WindowEvent) {
 pub struct Watcher {
     key: Keybind,
     reach: Arc<Mutex<Reach>>,
-    #[cfg(target_os = "linux")]
-    _global: Option<linux::Global>,
-    #[cfg(windows)]
-    _global: Option<windows::Hook>,
-    #[cfg(target_os = "macos")]
-    _global: Option<macos::Tap>,
+    #[cfg(any(target_os = "linux", target_os = "macos", windows))]
+    _global: Option<Global>,
 }
+
+#[cfg(target_os = "linux")]
+use linux::Global;
+#[cfg(target_os = "macos")]
+use macos::Tap as Global;
+#[cfg(windows)]
+use windows::Hook as Global;
 
 impl Watcher {
     /// Starts watching `key`; `told` hears where it works whenever that
@@ -233,16 +232,11 @@ impl Watcher {
             told(now);
         });
         #[cfg(target_os = "linux")]
-        let global = linux::Global::start(&key, runtime, report);
-        #[cfg(windows)]
+        let global = Global::start(&key, runtime, report);
+        #[cfg(any(target_os = "macos", windows))]
         let global = {
             let _ = runtime;
-            windows::Hook::start(scancode, report)
-        };
-        #[cfg(target_os = "macos")]
-        let global = {
-            let _ = runtime;
-            macos::Tap::start(scancode, report)
+            Global::start(scancode, report)
         };
         #[cfg(not(any(target_os = "linux", target_os = "macos", windows)))]
         {
@@ -278,7 +272,6 @@ impl Drop for Watcher {
     }
 }
 
-#[cfg(any(target_os = "linux", target_os = "macos", windows))]
 type Report = Arc<dyn Fn(Reach) + Send + Sync>;
 
 #[cfg(target_os = "linux")]
@@ -951,142 +944,93 @@ mod windows {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use std::{cell::Cell, ffi::c_void, ptr, sync::mpsc};
+    use std::{cell::Cell, ffi::c_void, ptr, ptr::NonNull, sync::mpsc};
+
+    use objc2_core_foundation::{CFMachPort, CFRetained, CFRunLoop, kCFRunLoopCommonModes};
+    use objc2_core_graphics::{
+        CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
+        CGEventTapProxy, CGEventType, CGPreflightListenEventAccess, CGRequestListenEventAccess,
+    };
 
     use super::{Reach, Report};
 
-    type CFTypeRef = *const c_void;
-    type CFRunLoopRef = *mut c_void;
-    type CFMachPortRef = *mut c_void;
-    type CGEventRef = *mut c_void;
-    type CGEventTapCallBack = unsafe extern "C" fn(
-        proxy: *mut c_void,
-        kind: u32,
-        event: CGEventRef,
-        user_info: *mut c_void,
-    ) -> CGEventRef;
-
-    const SESSION_EVENT_TAP: u32 = 1; // kCGSessionEventTap
-    const HEAD_INSERT: u32 = 0; // kCGHeadInsertEventTap
-    const LISTEN_ONLY: u32 = 1; // kCGEventTapOptionListenOnly
-    const KEY_DOWN: u32 = 10; // kCGEventKeyDown
-    const KEY_UP: u32 = 11; // kCGEventKeyUp
-    const FLAGS_CHANGED: u32 = 12; // kCGEventFlagsChanged
-    const DISABLED_BY_TIMEOUT: u32 = 0xFFFF_FFFE; // kCGEventTapDisabledByTimeout
-    const DISABLED_BY_USER_INPUT: u32 = 0xFFFF_FFFF; // kCGEventTapDisabledByUserInput
-    const KEYCODE_FIELD: u32 = 9; // kCGKeyboardEventKeycode
-
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGPreflightListenEventAccess() -> bool;
-        fn CGRequestListenEventAccess() -> bool;
-        fn CGEventTapCreate(
-            tap: u32,
-            place: u32,
-            options: u32,
-            events_of_interest: u64,
-            callback: CGEventTapCallBack,
-            user_info: *mut c_void,
-        ) -> CFMachPortRef;
-        fn CGEventTapEnable(tap: CFMachPortRef, enable: bool);
-        fn CGEventGetIntegerValueField(event: CGEventRef, field: u32) -> i64;
-        fn CGEventGetFlags(event: CGEventRef) -> u64;
-    }
-
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        static kCFRunLoopCommonModes: CFTypeRef;
-        fn CFRetain(object: CFTypeRef) -> CFTypeRef;
-        fn CFRelease(object: CFTypeRef);
-        fn CFMachPortCreateRunLoopSource(
-            allocator: CFTypeRef,
-            port: CFMachPortRef,
-            order: isize,
-        ) -> *mut c_void;
-        fn CFMachPortInvalidate(port: CFMachPortRef);
-        fn CFRunLoopGetCurrent() -> CFRunLoopRef;
-        fn CFRunLoopAddSource(run_loop: CFRunLoopRef, source: *mut c_void, mode: CFTypeRef);
-        fn CFRunLoopRun();
-        fn CFRunLoopStop(run_loop: CFRunLoopRef);
-    }
-
     thread_local! {
         /// The tap of the thread it runs on, for its callback to re-enable.
-        static PORT: Cell<CFMachPortRef> = const { Cell::new(ptr::null_mut()) };
+        static PORT: Cell<*const CFMachPort> = const { Cell::new(ptr::null()) };
     }
-
-    /// The tap's port and its thread's run loop, each retained for the
-    /// [`Tap`]; Core Foundation lets other threads invalidate and stop them.
-    struct Running {
-        port: CFMachPortRef,
-        run_loop: CFRunLoopRef,
-    }
-
-    // SAFETY: both are Core Foundation objects, whose retain counts are
-    // atomic, and `Tap` only invalidates, stops and releases them.
-    unsafe impl Send for Running {}
 
     /// A listen-only event tap on a thread of its own, which sees every
     /// key going down and up, modifiers included, while another app is in
     /// front, and takes none away. It needs Input Monitoring. Removed when
     /// dropped. Not `RegisterEventHotKey`, which keeps the key from the
     /// app in front and doesn't tell its release.
-    pub struct Tap(Running);
+    pub struct Tap {
+        port: CFRetained<CFMachPort>,
+        run_loop: CFRetained<CFRunLoop>,
+    }
+
+    // SAFETY: both are Core Foundation objects, whose retain counts are
+    // atomic, and Core Foundation lets other threads invalidate and stop
+    // them, which is all `Tap` does with them.
+    unsafe impl Send for Tap {}
 
     impl Tap {
         pub fn start(keycode: u32, report: Report) -> Option<Self> {
-            // SAFETY: plain calls, without arguments. The request asks
-            // macOS to list Yapfast under Input Monitoring, showing its
-            // prompt the first time; it applies from the next start.
-            if !unsafe { CGPreflightListenEventAccess() } {
-                unsafe { CGRequestListenEventAccess() };
+            // The request asks macOS to list Yapfast under Input Monitoring,
+            // showing its prompt the first time; it applies from the next
+            // start.
+            if !CGPreflightListenEventAccess() {
+                CGRequestListenEventAccess();
                 report(Reach::Focused(
                     "Allow Yapfast in System Settings › Privacy & Security › Input Monitoring and start it again; until then macOS keeps other apps' keys from it",
                 ));
                 return None;
             }
-            let (started, running) = mpsc::sync_channel(1);
+            let (started, tap) = mpsc::sync_channel(1);
             let spawned = std::thread::Builder::new()
                 .name("yapfast-talk-key".into())
                 .spawn(move || {
-                    let mask = 1 << KEY_DOWN | 1 << KEY_UP | 1 << FLAGS_CHANGED;
-                    // SAFETY: the callback only reads the events it's
-                    // given and the key code it's given as user data; the
-                    // port, its source and the run loop are this thread's,
-                    // retained once more for the `Tap` before it hears of
-                    // them, and released here once the run loop stops.
-                    unsafe {
-                        let port = CGEventTapCreate(
-                            SESSION_EVENT_TAP,
-                            HEAD_INSERT,
-                            LISTEN_ONLY,
+                    let mask = 1 << CGEventType::KeyDown.0
+                        | 1 << CGEventType::KeyUp.0
+                        | 1 << CGEventType::FlagsChanged.0;
+                    // SAFETY: the callback only reads the events it's given
+                    // and the key code it's given as user data.
+                    let port = unsafe {
+                        CGEvent::tap_create(
+                            CGEventTapLocation::SessionEventTap,
+                            CGEventTapPlacement::HeadInsertEventTap,
+                            CGEventTapOptions::ListenOnly,
                             mask,
-                            tapped,
+                            Some(tapped),
                             keycode as usize as *mut c_void,
-                        );
-                        if port.is_null() {
-                            let _ = started.send(None);
-                            return;
-                        }
-                        PORT.set(port);
-                        let source = CFMachPortCreateRunLoopSource(ptr::null(), port, 0);
-                        let run_loop = CFRunLoopGetCurrent();
-                        CFRunLoopAddSource(run_loop, source, kCFRunLoopCommonModes);
-                        CGEventTapEnable(port, true);
-                        CFRetain(port);
-                        CFRetain(run_loop);
-                        let _ = started.send(Some(Running { port, run_loop }));
-                        // Returns once stopped, or at once if the port was
-                        // invalidated before, which takes its source away.
-                        CFRunLoopRun();
-                        CFRelease(source);
-                        CFRelease(port);
-                    }
+                        )
+                    };
+                    let source = port
+                        .as_deref()
+                        .and_then(|port| CFMachPort::new_run_loop_source(None, Some(port), 0));
+                    let (Some(port), Some(source), Some(run_loop)) =
+                        (port, source, CFRunLoop::current())
+                    else {
+                        let _ = started.send(None);
+                        return;
+                    };
+                    PORT.set(&*port);
+                    // SAFETY: a constant Core Foundation defines.
+                    run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
+                    CGEvent::tap_enable(&port, true);
+                    let _ = started.send(Some(Tap {
+                        port: port.clone(),
+                        run_loop,
+                    }));
+                    // Returns once stopped, or at once if the port was
+                    // invalidated before, which takes its source away.
+                    CFRunLoop::run();
+                    PORT.set(ptr::null());
                 });
-            match spawned.ok().and_then(|_| running.recv().ok().flatten()) {
-                Some(running) => {
+            match spawned.ok().and_then(|_| tap.recv().ok().flatten()) {
+                Some(tap) => {
                     report(Reach::Everywhere(None));
-                    Some(Self(running))
+                    Some(tap)
                 }
                 None => {
                     report(Reach::Focused(
@@ -1100,66 +1044,58 @@ mod macos {
 
     impl Drop for Tap {
         fn drop(&mut self) {
-            // SAFETY: the `Tap` holds a reference to each, which it gives
-            // up here; invalidating the port takes its source off the run
-            // loop, so the thread ends even if it hasn't started running.
-            unsafe {
-                CFMachPortInvalidate(self.0.port);
-                CFRunLoopStop(self.0.run_loop);
-                CFRelease(self.0.port);
-                CFRelease(self.0.run_loop);
-            }
+            // Invalidating the port takes its source off the run loop, so
+            // the thread ends even if it hasn't started running.
+            self.port.invalidate();
+            self.run_loop.stop();
         }
     }
 
     /// Notes the push-to-talk key going down or up, re-enabling the tap
     /// when macOS turned it off, and passes the event on as it came.
-    unsafe extern "C" fn tapped(
-        _proxy: *mut c_void,
-        kind: u32,
-        event: CGEventRef,
+    unsafe extern "C-unwind" fn tapped(
+        _proxy: CGEventTapProxy,
+        kind: CGEventType,
+        event: NonNull<CGEvent>,
         user_info: *mut c_void,
-    ) -> CGEventRef {
+    ) -> *mut CGEvent {
         match kind {
             // macOS turns a tap off when a callback is slow, or for secure
             // input, such as a password field; the key may have come up
             // unseen meanwhile.
-            DISABLED_BY_TIMEOUT | DISABLED_BY_USER_INPUT => {
+            CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
                 yapfast_core::push_to_talk::hold(false);
                 let port = PORT.get();
                 if !port.is_null() {
                     // SAFETY: this thread's tap, alive while its run loop
                     // calls this.
-                    unsafe { CGEventTapEnable(port, true) };
+                    CGEvent::tap_enable(unsafe { &*port }, true);
                 }
             }
             _ => {
                 // SAFETY: for key and flag events, `event` is the event.
-                let (code, flags) = unsafe {
-                    (
-                        CGEventGetIntegerValueField(event, KEYCODE_FIELD),
-                        CGEventGetFlags(event),
-                    )
-                };
+                let event = Some(unsafe { event.as_ref() });
+                let code = CGEvent::integer_value_field(event, CGEventField::KeyboardEventKeycode);
+                let flags = CGEvent::flags(event).0;
                 if let Some(held) = held(kind, code, flags, user_info as usize as u32) {
                     yapfast_core::push_to_talk::hold(held);
                 }
             }
         }
-        event
+        event.as_ptr()
     }
 
     /// Whether an event holds the key `keycode`, lets it go, or neither:
     /// keys go down and up; a modifier's FlagsChanged has its flag set
     /// while it's held, the side's own where there are two.
-    fn held(kind: u32, code: i64, flags: u64, keycode: u32) -> Option<bool> {
+    fn held(kind: CGEventType, code: i64, flags: u64, keycode: u32) -> Option<bool> {
         if code != i64::from(keycode) {
             return None;
         }
         match kind {
-            KEY_DOWN => Some(true),
-            KEY_UP => Some(false),
-            FLAGS_CHANGED => {
+            CGEventType::KeyDown => Some(true),
+            CGEventType::KeyUp => Some(false),
+            CGEventType::FlagsChanged => {
                 let flag = match keycode {
                     0x3B => 0x0000_0001, // Left Control: NX_DEVICELCTLKEYMASK
                     0x38 => 0x0000_0002, // Left Shift
@@ -1186,32 +1122,19 @@ mod macos {
             time::{Duration, Instant},
         };
 
+        use objc2_core_graphics::CGEventFlags;
+
         use super::*;
-
-        const HID_EVENT_TAP: u32 = 0; // kCGHIDEventTap
-
-        #[link(name = "CoreGraphics", kind = "framework")]
-        unsafe extern "C" {
-            fn CGEventCreateKeyboardEvent(source: CFTypeRef, key: u16, down: bool) -> CGEventRef;
-            fn CGEventSetType(event: CGEventRef, kind: u32);
-            fn CGEventSetFlags(event: CGEventRef, flags: u64);
-            fn CGEventPost(tap: u32, event: CGEventRef);
-        }
 
         /// Types a key by its virtual key code, as a keyboard would; a
         /// modifier as FlagsChanged with `flags`.
         fn send(keycode: u16, down: bool, modifier: Option<u64>) {
-            // SAFETY: an event of our own, posted and released.
-            unsafe {
-                let event = CGEventCreateKeyboardEvent(ptr::null(), keycode, down);
-                assert!(!event.is_null());
-                if let Some(flags) = modifier {
-                    CGEventSetType(event, FLAGS_CHANGED);
-                    CGEventSetFlags(event, flags);
-                }
-                CGEventPost(HID_EVENT_TAP, event);
-                CFRelease(event);
+            let event = CGEvent::new_keyboard_event(None, keycode, down).expect("no event");
+            if let Some(flags) = modifier {
+                CGEvent::set_type(Some(&*event), CGEventType::FlagsChanged);
+                CGEvent::set_flags(Some(&*event), CGEventFlags(flags));
             }
+            CGEvent::post(CGEventTapLocation::HIDEventTap, Some(&*event));
         }
 
         fn wait_held(held: bool) {
@@ -1226,18 +1149,18 @@ mod macos {
         fn keys_and_modifiers_go_down_and_up() {
             const V: u32 = 0x09;
             const RIGHT_SHIFT: u32 = 0x3C;
-            assert_eq!(held(KEY_DOWN, 0x09, 0, V), Some(true));
-            assert_eq!(held(KEY_UP, 0x09, 0, V), Some(false));
-            assert_eq!(held(KEY_DOWN, 0x0B, 0, V), None); // B
+            const DOWN: CGEventType = CGEventType::KeyDown;
+            const UP: CGEventType = CGEventType::KeyUp;
+            const FLAGS: CGEventType = CGEventType::FlagsChanged;
+            assert_eq!(held(DOWN, 0x09, 0, V), Some(true));
+            assert_eq!(held(UP, 0x09, 0, V), Some(false));
+            assert_eq!(held(DOWN, 0x0B, 0, V), None); // B
             // Right Shift down: the generic Shift flag and the right side's.
-            assert_eq!(held(FLAGS_CHANGED, 0x3C, 0x2_0004, RIGHT_SHIFT), Some(true));
+            assert_eq!(held(FLAGS, 0x3C, 0x2_0004, RIGHT_SHIFT), Some(true));
             // Left Shift going down while the right one is held.
-            assert_eq!(held(FLAGS_CHANGED, 0x38, 0x2_0006, RIGHT_SHIFT), None);
+            assert_eq!(held(FLAGS, 0x38, 0x2_0006, RIGHT_SHIFT), None);
             // Right Shift up with the left one still down.
-            assert_eq!(
-                held(FLAGS_CHANGED, 0x3C, 0x2_0002, RIGHT_SHIFT),
-                Some(false)
-            );
+            assert_eq!(held(FLAGS, 0x3C, 0x2_0002, RIGHT_SHIFT), Some(false));
         }
 
         /// The tap hears the key typed anywhere, down and up. Needs Input
