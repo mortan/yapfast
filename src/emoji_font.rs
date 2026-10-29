@@ -23,60 +23,57 @@ const BEARING_X: i8 = 2;
 const BEARING_Y: i8 = 102;
 const ADVANCE: u8 = 140;
 
-/// A font with each PNG of `glyphs`, which must be [`SIDE`] pixels square, at
-/// its code point. Glyph 0 is the empty `.notdef`.
-#[cfg(not(target_os = "macos"))]
-pub fn build(family: &str, glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
-    let count = u16::try_from(glyphs.len() + 1).expect("fewer than 65535 glyphs");
-    let advance = units(i32::from(ADVANCE));
-    let tables: [([u8; 4], Vec<u8>); 10] = [
-        (*b"CBDT", cbdt(glyphs)),
-        (*b"CBLC", cblc(glyphs)),
-        (*b"OS/2", os2(advance, glyphs)),
-        (*b"cmap", cmap(glyphs)),
-        (*b"head", head(advance)),
-        (*b"hhea", hhea(advance, count)),
-        (*b"hmtx", hmtx(advance, count)),
-        (*b"maxp", maxp(count)),
-        (*b"name", name(family)),
-        (*b"post", post()),
-    ];
-    assemble(&tables)
-}
+/// Whether the glyphs have outlines, which macOS needs; see [`build`].
+const OUTLINES: bool = cfg!(target_os = "macos");
 
 /// A font with each PNG of `glyphs`, which must be [`SIDE`] pixels square, at
 /// its code point. Glyph 0 is the empty `.notdef`. CoreText, which Skia draws
 /// text with on macOS, loads no font without outlines and draws no CBDT, so
-/// here the PNGs are in an `sbix` table, Apple Color Emoji's format, and every
+/// there the PNGs are in an `sbix` table, Apple Color Emoji's format, and every
 /// glyph shares one square outline the size of its picture, which CoreText
 /// takes as the glyph's bounds and doesn't draw.
-#[cfg(target_os = "macos")]
 pub fn build(family: &str, glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
     let count = u16::try_from(glyphs.len() + 1).expect("fewer than 65535 glyphs");
     let advance = units(i32::from(ADVANCE));
-    let (glyf, loca) = outlines(count);
-    let mut head = head(advance);
-    // `loca` has long offsets.
-    head[50..52].copy_from_slice(&1u16.to_be_bytes());
-    let tables: [([u8; 4], Vec<u8>); 11] = [
+    let mut tables = vec![
         (*b"OS/2", os2(advance, glyphs)),
         (*b"cmap", cmap(glyphs)),
-        (*b"glyf", glyf),
-        (*b"head", head),
+        // The outlines' `loca` has long offsets.
+        (*b"head", head(advance, OUTLINES)),
         (*b"hhea", hhea(advance, count)),
         (*b"hmtx", hmtx(advance, count)),
-        (*b"loca", loca),
-        (*b"maxp", maxp_with_outlines(count)),
+        (*b"maxp", maxp(count, OUTLINES)),
         (*b"name", name(family)),
         (*b"post", post()),
-        (*b"sbix", sbix(glyphs)),
     ];
-    assemble(&tables)
+    tables.extend(bitmaps(glyphs, count));
+    assemble(tables)
 }
 
-/// A font of `tables`, which must be in the order of their tags.
-fn assemble(tables: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
-    let mut font = Vec::new();
+/// The tables that hold the bitmaps: CBDT and its index.
+#[cfg(not(target_os = "macos"))]
+fn bitmaps(glyphs: &[(char, Vec<u8>)], _count: u16) -> [([u8; 4], Vec<u8>); 2] {
+    [(*b"CBDT", cbdt(glyphs)), (*b"CBLC", cblc(glyphs))]
+}
+
+/// The tables that hold the bitmaps: `sbix`, and the outlines it's drawn at.
+#[cfg(target_os = "macos")]
+fn bitmaps(glyphs: &[(char, Vec<u8>)], count: u16) -> [([u8; 4], Vec<u8>); 3] {
+    let (glyf, loca) = outlines(count);
+    [(*b"glyf", glyf), (*b"loca", loca), (*b"sbix", sbix(glyphs))]
+}
+
+/// A font of `tables`, in the order of their tags, as the font's directory
+/// must be. It's made at its final size, as it stays registered as it is, and
+/// each table goes once it's in.
+fn assemble(mut tables: Vec<([u8; 4], Vec<u8>)>) -> Vec<u8> {
+    tables.sort_unstable_by_key(|(tag, _)| *tag);
+    let size = 12
+        + tables
+            .iter()
+            .map(|(_, data)| 16 + data.len().next_multiple_of(4))
+            .sum::<usize>();
+    let mut font = Vec::with_capacity(size);
     let entry_selector = (tables.len() as u16).ilog2() as u16;
     let search_range = 16u16 << entry_selector;
     put32(&mut font, 0x0001_0000);
@@ -86,7 +83,7 @@ fn assemble(tables: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
     put16(&mut font, tables.len() as u16 * 16 - search_range);
     let mut offset = 12 + 16 * tables.len();
     let mut head_at = 0;
-    for (tag, data) in tables {
+    for (tag, data) in &tables {
         if tag == b"head" {
             head_at = offset;
         }
@@ -97,7 +94,7 @@ fn assemble(tables: &[([u8; 4], Vec<u8>)]) -> Vec<u8> {
         offset += data.len().next_multiple_of(4);
     }
     for (_, data) in tables {
-        font.extend_from_slice(data);
+        font.extend_from_slice(&data);
         font.resize(font.len().next_multiple_of(4), 0);
     }
     // The whole font sums to 0xB1B0AFBA.
@@ -278,11 +275,12 @@ fn cmap(glyphs: &[(char, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-fn head(advance: i16) -> Vec<u8> {
+/// With `long_offsets`, `loca` holds 32-bit offsets, else 16-bit halves.
+fn head(advance: i16, long_offsets: bool) -> Vec<u8> {
     let mut out = Vec::new();
     put32(&mut out, 0x0001_0000);
     put32(&mut out, 0x0001_0000);
-    // The checksum adjustment, which `build` sets last.
+    // The checksum adjustment, which `assemble` sets last.
     put32(&mut out, 0);
     put32(&mut out, 0x5F0F_3CF5);
     // The baseline is at y 0, and the left side bearing at x 0.
@@ -296,7 +294,7 @@ fn head(advance: i16) -> Vec<u8> {
     put16(&mut out, 0);
     put16(&mut out, 8);
     put16(&mut out, 2);
-    put16(&mut out, 0);
+    put16(&mut out, u16::from(long_offsets));
     put16(&mut out, 0);
     out
 }
@@ -400,24 +398,19 @@ fn outlines(count: u16) -> (Vec<u8>, Vec<u8>) {
     (glyf, loca)
 }
 
-/// Version 1, for a font with outlines: the glyph count, and the most points
-/// and contours a glyph has.
-#[cfg(target_os = "macos")]
-fn maxp_with_outlines(count: u16) -> Vec<u8> {
+/// The glyph count, and with `outlines` the most points and contours a glyph
+/// has (version 1); without, the count alone (version 0.5).
+fn maxp(count: u16, outlines: bool) -> Vec<u8> {
     let mut out = Vec::new();
-    put32(&mut out, 0x0001_0000);
-    for value in [count, 4, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] {
-        put16(&mut out, value);
+    if outlines {
+        put32(&mut out, 0x0001_0000);
+        for value in [count, 4, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] {
+            put16(&mut out, value);
+        }
+    } else {
+        put32(&mut out, 0x0000_5000);
+        put16(&mut out, count);
     }
-    out
-}
-
-/// Version 0.5: the glyph count alone, for a font without outlines.
-#[cfg(not(target_os = "macos"))]
-fn maxp(count: u16) -> Vec<u8> {
-    let mut out = Vec::new();
-    put32(&mut out, 0x0000_5000);
-    put16(&mut out, count);
     out
 }
 
@@ -499,12 +492,6 @@ mod tests {
         for value in [0, 0, 0, glyf.len() as u16 / 2] {
             put16(&mut loca, value);
         }
-        let mut maxp = Vec::new();
-        put32(&mut maxp, 0x0001_0000);
-        // Three glyphs, four points, one contour, two zones.
-        for value in [3, 4, 1, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0] {
-            put16(&mut maxp, value);
-        }
         let mut colr = Vec::new();
         // Version 1, with no version 0 records, and its base glyph list at 34.
         put16(&mut colr, 1);
@@ -532,17 +519,18 @@ mod tests {
         put32(&mut cpal, 14);
         put16(&mut cpal, 0);
         cpal.extend([0, 0, 255, 255]);
-        assemble(&[
+        assemble(vec![
             (*b"COLR", colr),
             (*b"CPAL", cpal),
             (*b"OS/2", os2(advance, &glyphs)),
             (*b"cmap", cmap(&glyphs)),
             (*b"glyf", glyf),
-            (*b"head", head(advance)),
+            (*b"head", head(advance, false)),
             (*b"hhea", hhea(advance, 3)),
             (*b"hmtx", hmtx(advance, 3)),
             (*b"loca", loca),
-            (*b"maxp", maxp),
+            // Three glyphs, four points, one contour, two zones.
+            (*b"maxp", maxp(3, true)),
             (*b"name", name("COLRv1 Square")),
             (*b"post", post()),
         ])
@@ -602,5 +590,6 @@ mod tests {
             0xB1B0_AFBA,
             "the head checksum adjustment balances"
         );
+        assert_eq!(font.len(), font.capacity(), "made at its final size");
     }
 }
