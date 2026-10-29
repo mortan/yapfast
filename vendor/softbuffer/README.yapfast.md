@@ -14,12 +14,16 @@ Changes, marked `Yapfast:` in `src/backends/cg.rs`:
 - Skia draws straight into up to three IOSurfaces of the window's size, and
   the layer shows one of them without a copy. A new frame takes a surface
   the window server no longer reads, never the one shown, so a frame is
-  never drawn while it is on screen.
+  never drawn while it is on screen; of those, the one shown longest ago,
+  so the surfaces take turns and none falls more frames behind than Slint
+  remembers what changed, which would draw it whole.
 - `age()` reports how many presents ago a surface was shown, so Slint
   redraws only what changed since then instead of the whole window.
-- Surfaces the layer doesn't show are marked purgeable; macOS may take them
-  back under memory pressure, and the next frame drawn into one is drawn
-  whole. The footprint counts them as reclaimable.
+- Once the window has drawn nothing for a second, the surfaces the layer
+  doesn't show are marked purgeable; macOS may take them back under memory
+  pressure, and the next frame drawn into one is drawn whole. The footprint
+  counts them as reclaimable. Marked at every frame, they were taken back
+  while a GIF played, and every few frames drew the whole window.
 - A row may be longer than the window is wide, for IOSurface's alignment;
   Slint's renderer takes the row length from the buffer's length.
 - The surfaces are tagged sRGB, the space Slint's Skia renders in, where the

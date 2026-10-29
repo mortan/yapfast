@@ -4,7 +4,10 @@ use crate::error::InitError;
 use crate::{Rect, SoftBufferError};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, Bool};
-use objc2::{define_class, msg_send, AllocAnyThread, DefinedClass, MainThreadMarker, Message};
+use objc2::{
+    define_class, msg_send, sel, AllocAnyThread, ClassType, DefinedClass, MainThreadMarker,
+    Message,
+};
 use objc2_core_foundation::{
     CFDictionary, CFNumber, CFRetained, CFString, CFType, CGPoint,
 };
@@ -28,15 +31,20 @@ use std::num::NonZeroU32;
 use std::ops::Deref;
 use std::ptr;
 use std::slice;
+use std::sync::Mutex;
 
 /// Yapfast: the most frames a window keeps, one shown and two to draw into while the window
 /// server still reads the others.
 const MAX_FRAMES: usize = 3;
 
+/// Yapfast: how long the window draws nothing before the frames it doesn't show become
+/// purgeable. Purged while it animates, a frame would be drawn whole again at its next turn.
+const IDLE_SECONDS: f64 = 1.0;
+
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "SoftbufferObserver"]
-    #[ivars = SendCALayer]
+    #[ivars = ObserverIvars]
     #[derive(Debug)]
     struct Observer;
 
@@ -52,12 +60,77 @@ define_class!(
         ) {
             self.update(key_path, change);
         }
+
+        /// Yapfast: the window has drawn nothing for `IDLE_SECONDS`.
+        #[unsafe(method(makeSpareFramesPurgeable))]
+        fn make_spare_frames_purgeable(&self) {
+            for surface in self.ivars().take_spare() {
+                // SAFETY: The old state may be null.
+                unsafe {
+                    surface.set_purgeable(
+                        IOSurfacePurgeabilityState::PurgeableVolatile.0,
+                        ptr::null_mut(),
+                    )
+                };
+            }
+        }
     }
 );
 
+#[derive(Debug)]
+struct ObserverIvars {
+    layer: SendCALayer,
+    /// Yapfast: the frames the layer doesn't show, made purgeable once the window is idle.
+    spare: Mutex<SpareFrames>,
+}
+
+impl ObserverIvars {
+    fn take_spare(&self) -> Vec<CFRetained<IOSurfaceRef>> {
+        std::mem::take(&mut self.spare.lock().unwrap_or_else(|e| e.into_inner()).0)
+    }
+}
+
+#[derive(Debug, Default)]
+struct SpareFrames(Vec<CFRetained<IOSurfaceRef>>);
+
+// SAFETY: IOSurface objects are thread safe, as for `Frame`.
+unsafe impl Send for SpareFrames {}
+
 impl Observer {
+    /// Yapfast: `spare` become purgeable unless the window draws again within `IDLE_SECONDS`.
+    fn after_idle(&self, spare: Vec<CFRetained<IOSurfaceRef>>) {
+        self.cancel_idle();
+        self.ivars().spare.lock().unwrap_or_else(|e| e.into_inner()).0 = spare;
+        // SAFETY: The selector names a method of this class that takes no argument; the run loop
+        // keeps the observer until the request runs or is cancelled.
+        unsafe {
+            let _: () = msg_send![
+                self,
+                performSelector: sel!(makeSpareFramesPurgeable),
+                withObject: Option::<&AnyObject>::None,
+                afterDelay: IDLE_SECONDS,
+            ];
+        }
+    }
+
+    fn cancel_idle(&self) {
+        // SAFETY: Cancels only this observer's requests for that selector.
+        unsafe {
+            let _: () = msg_send![
+                NSObject::class(),
+                cancelPreviousPerformRequestsWithTarget: self,
+                selector: sel!(makeSpareFramesPurgeable),
+                object: Option::<&AnyObject>::None,
+            ];
+        }
+        self.ivars().take_spare();
+    }
+
     fn new(layer: &CALayer) -> Retained<Self> {
-        let this = Self::alloc().set_ivars(SendCALayer(layer.retain()));
+        let this = Self::alloc().set_ivars(ObserverIvars {
+            layer: SendCALayer(layer.retain()),
+            spare: Mutex::default(),
+        });
         unsafe { msg_send![super(this), init] }
     }
 
@@ -66,7 +139,7 @@ impl Observer {
         key_path: Option<&NSString>,
         change: Option<&NSDictionary<NSKeyValueChangeKey, AnyObject>>,
     ) {
-        let layer = self.ivars();
+        let layer = &self.ivars().layer;
 
         let change =
             change.expect("requested a change dictionary in `addObserver`, but none was provided");
@@ -127,6 +200,7 @@ pub struct CGImpl<D, W> {
 
 impl<D, W> Drop for CGImpl<D, W> {
     fn drop(&mut self) {
+        self.observer.cancel_idle();
         // SAFETY: Registered in `new`, must be removed before the observer is deallocated.
         unsafe {
             self.root_layer
@@ -279,6 +353,7 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> SurfaceInterface<D, W> for CGImpl<
             // next present.
             self.frames.clear();
             self.front = None;
+            self.observer.cancel_idle();
         }
         Ok(())
     }
@@ -286,8 +361,12 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> SurfaceInterface<D, W> for CGImpl<
     fn buffer_mut(&mut self) -> Result<BufferImpl<'_, D, W>, SoftBufferError> {
         // Yapfast: draw into a frame the window server is done with, never the one the layer
         // shows, and make a new one only when every other frame is still in use.
+        // Of those, the one shown longest ago, so the frames take turns and none falls more
+        // presents behind than Slint's renderer remembers what changed (three), which would draw
+        // it whole; one drawn whole anyway (age 0) last.
         let free = (0..self.frames.len())
-            .find(|&index| Some(index) != self.front && !self.frames[index].surface.is_in_use());
+            .filter(|&index| Some(index) != self.front && !self.frames[index].surface.is_in_use())
+            .max_by_key(|&index| self.frames[index].age);
         let index = match free {
             Some(index) => index,
             None if self.frames.len() < MAX_FRAMES => {
@@ -452,18 +531,19 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
                 frame.age = 1;
             } else {
                 frame.age = frame.age.saturating_add(u8::from(frame.age > 0));
-                // Yapfast: the system may take back a frame the layer doesn't show, as it does
-                // with a cache, and `buffer_mut` draws it whole again.
-                // SAFETY: The old state may be null.
-                unsafe {
-                    frame.surface.set_purgeable(
-                        IOSurfacePurgeabilityState::PurgeableVolatile.0,
-                        ptr::null_mut(),
-                    )
-                };
             }
         }
         imp.front = Some(index);
+        // Yapfast: once the window is idle, the system may take back the frames the layer doesn't
+        // show, as it does with a cache, and `buffer_mut` draws such a frame whole again.
+        imp.observer.after_idle(
+            imp.frames
+                .iter()
+                .enumerate()
+                .filter(|&(other, _)| other != index)
+                .map(|(_, frame)| frame.surface.clone())
+                .collect(),
+        );
 
         // The CALayer has a default action associated with a change in the layer contents, causing
         // a quarter second fade transition to happen every time a new buffer is applied. This can
