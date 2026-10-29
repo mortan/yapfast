@@ -26,8 +26,6 @@ mod icon;
 mod instance;
 #[cfg(feature = "desktop")]
 mod notify;
-#[cfg(all(feature = "desktop", target_os = "macos"))]
-mod objc;
 #[cfg(feature = "desktop")]
 mod paste;
 #[cfg(feature = "desktop")]

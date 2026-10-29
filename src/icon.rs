@@ -64,9 +64,10 @@ mod platform {
 mod platform {
     use std::sync::Once;
 
+    use objc2::{AnyThread, MainThreadMarker};
+    use objc2_app_kit::{NSApplication, NSImage};
+    use objc2_foundation::NSData;
     use slint::winit_030::winit::window::WindowAttributes;
-
-    use crate::objc::{Id, class, objc_release, send};
 
     /// The logo's share of the icon's side, as Apple's icon grid has it and
     /// scripts/make-macos-icon draws Yapfast.app's.
@@ -113,30 +114,18 @@ mod platform {
         )
     }
 
+    /// On the main thread, where winit makes windows.
     fn set_dock_icon(svg: &str) {
-        // SAFETY: each message has the types AppKit declares; this runs on the
-        // main thread, where winit makes windows; and the image is released
-        // once the application holds it.
-        unsafe {
-            let data: Id = send!(class(c"NSData"), "alloc"; Id);
-            let data: Id = send!(
-                data,
-                "initWithBytes:length:",
-                svg.as_ptr() => *const u8,
-                svg.len() => usize;
-                Id
-            );
-            let image: Id = send!(class(c"NSImage"), "alloc"; Id);
-            let image: Id = send!(image, "initWithData:", data => Id; Id);
-            objc_release(data);
-            if image.is_null() {
-                tracing::warn!("AppKit could not read Yapfast's icon");
-                return;
-            }
-            let application: Id = send!(class(c"NSApplication"), "sharedApplication"; Id);
-            send!(application, "setApplicationIconImage:", image => Id; ());
-            objc_release(image);
-        }
+        let Some(mtm) = MainThreadMarker::new() else {
+            return;
+        };
+        let data = NSData::with_bytes(svg.as_bytes());
+        let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) else {
+            tracing::warn!("AppKit could not read Yapfast's icon");
+            return;
+        };
+        // SAFETY: an image, not None.
+        unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)) };
     }
 
     #[cfg(test)]

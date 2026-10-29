@@ -50,7 +50,7 @@ impl Pointer {
             #[cfg(windows)]
             RawWindowHandle::Win32(handle) => Source::Win32(handle.hwnd.get()),
             #[cfg(target_os = "macos")]
-            RawWindowHandle::AppKit(handle) => Source::AppKit(appkit::View::new(handle.ns_view)),
+            RawWindowHandle::AppKit(handle) => Source::AppKit(appkit::View::new(handle.ns_view)?),
             _ => return None,
         };
         Some(Self {
@@ -113,74 +113,36 @@ mod appkit {
     //! view's dragging destination, which is winit's, and winit passes on no
     //! position.
 
-    use std::ffi::c_void;
-    use std::ptr::NonNull;
+    use std::{ffi::c_void, ptr::NonNull};
 
-    use crate::objc::{Id, class, objc_release, objc_retain, send};
+    use objc2::rc::Retained;
+    use objc2_app_kit::{NSEvent, NSView};
 
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Point {
-        x: f64,
-        y: f64,
-    }
-
-    #[repr(C)]
-    #[derive(Clone, Copy)]
-    struct Rect {
-        origin: Point,
-        size: Point,
-    }
-
-    /// A view, kept alive while a drag goes on. Used on the main thread only,
-    /// as AppKit asks.
-    pub struct View(NonNull<c_void>);
+    /// A view, kept alive while a drag goes on; for the main thread only,
+    /// as AppKit asks, which `NSView` not being `Send` sees to.
+    pub struct View(Retained<NSView>);
 
     impl View {
-        pub fn new(view: NonNull<c_void>) -> Self {
+        pub fn new(view: NonNull<c_void>) -> Option<Self> {
             // SAFETY: winit's handle is a live NSView.
-            unsafe { objc_retain(view.as_ptr()) };
-            Self(view)
+            unsafe { Retained::retain(view.as_ptr().cast::<NSView>()) }.map(Self)
         }
 
         /// Where the pointer is, in the view's logical pixels from its top
         /// left corner, unless the view has no window.
         pub fn pointer(&self) -> Option<(f64, f64)> {
-            let view = self.0.as_ptr();
-            // SAFETY: each message is sent to a live object with the
-            // argument and result types AppKit declares for it.
-            unsafe {
-                let window: Id = send!(view, "window"; Id);
-                if window.is_null() {
-                    return None;
-                }
-                let screen: Point = send!(class(c"NSEvent"), "mouseLocation"; Point);
-                let in_window: Point =
-                    send!(window, "convertPointFromScreen:", screen => Point; Point);
-                let point: Point = send!(
-                    view,
-                    "convertPoint:fromView:",
-                    in_window => Point,
-                    std::ptr::null_mut() => Id;
-                    Point
-                );
-                let bounds: Rect = send!(view, "bounds"; Rect);
-                let flipped: bool = send!(view, "isFlipped"; bool);
-                // AppKit's y goes up from the bottom, unless the view is flipped.
-                let y = if flipped {
-                    point.y - bounds.origin.y
-                } else {
-                    bounds.origin.y + bounds.size.y - point.y
-                };
-                Some((point.x - bounds.origin.x, y))
-            }
-        }
-    }
-
-    impl Drop for View {
-        fn drop(&mut self) {
-            // SAFETY: `new` retained it.
-            unsafe { objc_release(self.0.as_ptr()) };
+            let view = &self.0;
+            let in_window = view
+                .window()?
+                .convertPointFromScreen(NSEvent::mouseLocation());
+            let point = view.convertPoint_fromView(in_window, None);
+            let bounds = view.bounds();
+            // AppKit's y goes up from the bottom, unless the view is flipped.
+            let y = match view.isFlipped() {
+                true => point.y - bounds.origin.y,
+                false => bounds.origin.y + bounds.size.height - point.y,
+            };
+            Some((point.x - bounds.origin.x, y))
         }
     }
 }
