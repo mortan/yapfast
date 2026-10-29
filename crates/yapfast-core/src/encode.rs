@@ -624,7 +624,8 @@ mod tests {
 
     /// macOS ends a compression session across sleep, or when its media
     /// services restart: the encoder opens another and goes on from a
-    /// keyframe, on the GPU still.
+    /// keyframe, on the GPU still. A bitrate set in between, as the stream
+    /// worker sets one before each frame, goes to the new session.
     #[cfg(target_os = "macos")]
     #[test]
     fn opens_another_session_when_macos_ends_one() {
@@ -644,6 +645,7 @@ mod tests {
                 if frame == 2 {
                     // SAFETY: raw is VideoToolbox's encoder, still open.
                     unsafe { yapfast_hwenc_end_session(encoder.raw) };
+                    encoder.set_bitrate(400).unwrap();
                 }
                 let encoded = encoder.encode(&rgba, frame * 3000, false).unwrap();
                 let encoded = encoded.expect("a frame");

@@ -358,7 +358,8 @@ long yapfast_hwenc_encode(struct yapfast_hwenc *h, const unsigned char *y, int y
                              capacity);
       if (encoded == SESSION_ENDED) encoded = -1;
     } else {
-      /* Half a session isn't used: the next frame tries again. */
+      /* Half a session isn't kept. The frame fails, so encode.rs gives
+       * H264 to x264 and the stream worker withdraws H265. */
       close_session(h);
       encoded = -1;
     }
@@ -373,9 +374,11 @@ void yapfast_hwenc_end_session(struct yapfast_hwenc *h) {
 }
 
 /* Changes the bitrate aimed for, from the next frame on, without a
- * keyframe. 0, or -1 when VideoToolbox refused it. */
+ * keyframe. 0, or -1 when VideoToolbox refused it. A session macOS ended
+ * takes no rate; the one the next frame opens in its place takes this one. */
 int yapfast_hwenc_set_bitrate(struct yapfast_hwenc *h, unsigned kbps) {
-  if (h->session && set_rate(h->session, kbps) != noErr) return -1;
   h->kbps = kbps;
-  return 0;
+  if (!h->session) return 0;
+  OSStatus status = set_rate(h->session, kbps);
+  return status == noErr || status == kVTInvalidSessionErr ? 0 : -1;
 }
