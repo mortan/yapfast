@@ -33,11 +33,12 @@ Opened from Finder or the Dock, Yapfast logs to
 Yapfast does on macOS what it does on Linux, apart from what's
 [open](#whats-open), through these parts.
 
-- **Sound.** Calls, the input meter, ringing, Yapfast's sounds and a watched
-  stream's or a video's sound go through Core Audio's HAL output unit, one
-  per stream, and a ring between it and the caller; a stream fails and opens
-  again as soon as Core Audio says its device went away. Devices are kept by
-  their Core Audio UID
+- **Sound.** Discord calls, the input meter, ringing, Yapfast's sounds and a
+  watched stream's or a video's sound go through Core Audio's HAL output
+  unit, one per stream, and a ring between it and the caller; a stream fails
+  and opens again as soon as Core Audio says its device went away. Yapfast
+  (Matrix) calls play and record through WebRTC's own macOS device module.
+  Devices are kept by their Core Audio UID
   ([architecture](architecture.md#how-a-ui-change-flows-through-the-code);
   [voice](voice.md#sounds) has how devices are named and followed).
 - **Go Live's sound** is a Core Audio process tap of every process but

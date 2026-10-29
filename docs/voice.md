@@ -183,8 +183,8 @@ major pentatonic so any two sound well together. Felt piano, Soft marimba,
 Mellow Rhodes and Glow are synthesized; New Kalimba and Flute play the same
 notes on one recorded note each, made with ElevenLabs' sound generator and kept
 as 24 kHz samples in `crates/yapfast-core/sounds/`, played faster or slower for
-each note. They play on the call's speakers through `audio_io.rs`, on Linux and
-Windows, like ringing. Settings › Sounds chooses the set and the volume, from
+each note. They play on the call's speakers through `audio_io.rs`, like
+ringing. Settings › Sounds chooses the set and the volume, from
 0% to 200%. A slider's percentage becomes a gain by its square, which spreads
 the quiet settings along more of it. At 100%, the default, the loudest sounds
 peak 12 dB under full scale, and at 200% they reach it. Each sound can also
@@ -207,8 +207,9 @@ it then.
 
 A call's own speakers and microphone, and a watched stream's sound, outlast
 their device (`audio_io::LastingOutput` and `LastingInput`). Bluetooth
-headphones that drop out end the stream on Windows, and on PulseAudio the
-server moves it to another device and leaves it there when they return.
+headphones that drop out end the stream on Windows and macOS, and on
+PulseAudio the server moves it to another device and leaves it there when
+they return.
 So a stream that fails opens again, on its device or on the default while
 that's gone, and every 2 s it checks which endpoint it would open now and
 moves there if that's another one. On PulseAudio that endpoint is the
