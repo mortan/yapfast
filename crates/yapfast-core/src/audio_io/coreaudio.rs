@@ -772,7 +772,14 @@ impl Drop for Wake {
 static WATCHED: Mutex<Watched> = Mutex::new(Watched {
     streams: Vec::new(),
     listened: Vec::new(),
+    rate_changed: Vec::new(),
 });
+
+/// How long a device whose rate changed under a stream isn't watched for
+/// another change: a Bluetooth headset may switch profiles, and rates, as
+/// its microphone starts and stops, and chasing each switch could reopen
+/// the stream over and over.
+const RATE_SETTLES: Duration = Duration::from_secs(5);
 
 struct Watched {
     streams: Vec<Watcher>,
@@ -781,6 +788,17 @@ struct Watched {
     /// waits for a call under way, so a device keeps its listener, which
     /// needs no data, while it's connected.
     listened: Vec<AudioObjectID>,
+    /// When each device last changed its rate under a stream.
+    rate_changed: Vec<(AudioObjectID, Instant)>,
+}
+
+/// Whether `device` changed its rate under a stream a moment ago.
+fn rate_changed_lately(device: AudioObjectID) -> bool {
+    let watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
+    watched
+        .rate_changed
+        .iter()
+        .any(|&(changed, at)| changed == device && at.elapsed() < RATE_SETTLES)
 }
 
 /// A stream's device, the rate it opened at if it can't follow another,
@@ -796,15 +814,19 @@ struct Watcher {
 unsafe impl Send for Watcher {}
 
 impl Watcher {
-    /// Whether the device went away, or changed a rate the stream can't
-    /// follow; `listed` is every device, when Core Audio says.
+    /// Whether the device went away; `listed` is every device, when Core
+    /// Audio says.
     fn gone(&self, listed: Option<&[AudioObjectID]>) -> bool {
         listed.is_some_and(|listed| !listed.contains(&self.device))
             || property::<u32>(self.device, sys::IS_ALIVE, sys::SCOPE_GLOBAL) == Some(0)
-            || self.rate.is_some_and(|rate| {
-                property::<f64>(self.device, sys::NOMINAL_SAMPLE_RATE, sys::SCOPE_GLOBAL)
-                    .is_some_and(|now| now != rate)
-            })
+    }
+
+    /// Whether the device changed a rate the stream can't follow.
+    fn rate_changed(&self) -> bool {
+        self.rate.is_some_and(|rate| {
+            property::<f64>(self.device, sys::NOMINAL_SAMPLE_RATE, sys::SCOPE_GLOBAL)
+                .is_some_and(|now| now != rate)
+        })
     }
 }
 
@@ -820,12 +842,24 @@ unsafe extern "C" fn devices_changed(
     let listed = objects(sys::DEVICES);
     let listed = (!listed.is_empty()).then_some(&listed[..]);
     let mut watched = WATCHED.lock().unwrap_or_else(PoisonError::into_inner);
+    let mut rate_changed = Vec::new();
     for watcher in &watched.streams {
-        if watcher.gone(listed) {
+        let rate = watcher.rate_changed();
+        if rate {
+            rate_changed.push(watcher.device);
+        }
+        if rate || watcher.gone(listed) {
             // SAFETY: the lock keeps the stream, and so its wake, open.
             unsafe { (*watcher.wake).lose() };
         }
     }
+    let now = Instant::now();
+    watched.rate_changed.retain(|&(device, at)| {
+        now.duration_since(at) < RATE_SETTLES && !rate_changed.contains(&device)
+    });
+    watched
+        .rate_changed
+        .extend(rate_changed.into_iter().map(|device| (device, now)));
     if let Some(listed) = listed {
         // One that comes back may come back as the same object.
         watched.listened.retain(|device| listed.contains(device));
@@ -1292,7 +1326,6 @@ impl Input {
         let device = device(microphone, false).context("this microphone is no longer connected")?;
         super::warn_if_microphone_denied();
         let mut unit = Unit::new(device, true)?;
-        let nominal = property::<f64>(device, sys::NOMINAL_SAMPLE_RATE, sys::SCOPE_GLOBAL);
         // The unit converts samples and channels, but not the rate.
         let heard: sys::StreamDescription = unit.get(sys::STREAM_FORMAT, sys::UNIT_INPUT, 1)?;
         let rate = if heard.sample_rate > 0.0 {
@@ -1344,10 +1377,17 @@ impl Input {
                 )
             })
             .transpose()?;
-        // A rate that changes from here on fails the stream, which opens
-        // again at the new one.
-        let watch = Watch::new(device, nominal, &recording.wake);
         unit.start()?;
+        // A rate that changes from here on fails the stream, which opens
+        // again at the new one. It's read once the unit runs: starting a
+        // Bluetooth headset's microphone may switch its profile and rate,
+        // which isn't a change under the stream. A device that changed its
+        // rate a moment ago isn't watched for another; if the stream can't
+        // follow, 2 s without samples fails it.
+        let nominal = (!rate_changed_lately(device))
+            .then(|| property::<f64>(device, sys::NOMINAL_SAMPLE_RATE, sys::SCOPE_GLOBAL))
+            .flatten();
+        let watch = Watch::new(device, nominal, &recording.wake);
         Ok(Self {
             _unit: unit,
             _watch: watch,

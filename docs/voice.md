@@ -221,8 +221,10 @@ default also follows Windows when it changes; macOS works the same way with
 the device's Core Audio UID. A WASAPI stream fails at its next write or read
 once its device goes. A Core Audio one fails at once when Core Audio says
 its device went away (it leaves the device list, or stops being alive) or a
-microphone's rate changed, which the stream can't follow, so it opens again
-at the new rate. On both, 2 s without the device taking or bringing
+microphone's rate changed after it started, which the stream can't follow,
+so it opens again at the new rate; for 5 s after that, the device's rate
+isn't watched, so a Bluetooth headset switching profiles as its microphone
+starts and stops isn't chased in a loop. On both, 2 s without the device taking or bringing
 samples fails the stream too. While nothing opens, the
 stream keeps time with silence and tries again every half second. Settings
 show a chosen device that isn't connected last in its list, as "(not
