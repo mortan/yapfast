@@ -1133,14 +1133,9 @@ mod macos {
                     // SAFETY: a constant Core Foundation defines.
                     run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
                     CGEvent::tap_enable(&port, true);
-                    // Caps Lock holds while it's on, which no event says
-                    // until it's pressed again.
-                    if keycode == CAPS_LOCK
-                        && CGEventSource::flags_state(CGEventSourceStateID::CombinedSessionState)
-                            .contains(CGEventFlags::MaskAlphaShift)
-                    {
-                        yapfast_core::push_to_talk::hold(true);
-                    }
+                    // A Caps Lock already on, as after typing in capitals or
+                    // after recording it, doesn't talk: only a press seen
+                    // here does.
                     let _ = started.send(Some(Tap {
                         port: port.clone(),
                         run_loop,
@@ -1185,9 +1180,13 @@ mod macos {
         match kind {
             // macOS turns a tap off when a callback is slow, or for secure
             // input, such as a password field; the key may have come up
-            // unseen meanwhile.
+            // unseen meanwhile. Caps Lock's light says whether it did.
             CGEventType::TapDisabledByTimeout | CGEventType::TapDisabledByUserInput => {
-                yapfast_core::push_to_talk::hold(false);
+                let locked = CGEventSource::flags_state(CGEventSourceStateID::CombinedSessionState)
+                    .contains(CGEventFlags::MaskAlphaShift);
+                let talking = yapfast_core::push_to_talk::held();
+                let keycode = user_info as usize as u32;
+                yapfast_core::push_to_talk::hold(still_held(keycode, talking, locked));
                 let port = PORT.get();
                 if !port.is_null() {
                     // SAFETY: this thread's tap, alive while its run loop
@@ -1208,11 +1207,20 @@ mod macos {
         event.as_ptr()
     }
 
+    /// Whether the key `keycode` still holds after the tap missed events,
+    /// as it was `talking` and with Caps Lock's lock as `locked` now: only
+    /// Caps Lock, whose lock stayed on since it was pressed to talk. A lock
+    /// that was on without talking stays silent, as at the start.
+    fn still_held(keycode: u32, talking: bool, locked: bool) -> bool {
+        keycode == CAPS_LOCK && talking && locked
+    }
+
     /// Whether an event holds the key `keycode`, lets it go, or neither:
     /// keys go down and up; a modifier's FlagsChanged has its flag set
     /// while it's held, the side's own where there are two. Caps Lock
     /// says only that it was pressed, turning its lock on or off, so it
-    /// holds while the lock is on, as its light shows.
+    /// holds from a press that turns the lock on to the one that turns it
+    /// off, as its light shows.
     fn held(kind: CGEventType, code: i64, flags: u64, keycode: u32) -> Option<bool> {
         if code != i64::from(keycode) {
             return None;
@@ -1291,6 +1299,17 @@ mod macos {
             assert_eq!(held(FLAGS, 0x3F, 0, FN), Some(false));
             // Shift while Caps Lock is the key, and the lock is on.
             assert_eq!(held(FLAGS, 0x38, 0x3_0002, CAPS_LOCK), None);
+        }
+
+        /// After macOS turned the tap off and on, Caps Lock talks on while
+        /// the lock that started it is still on; a lock that was on without
+        /// talking, as when the tap starts, and any other key, don't.
+        #[test]
+        fn only_a_caps_lock_still_on_talks_on_after_the_tap_was_off() {
+            assert!(still_held(CAPS_LOCK, true, true));
+            assert!(!still_held(CAPS_LOCK, true, false), "pressed off unseen");
+            assert!(!still_held(CAPS_LOCK, false, true), "on without talking");
+            assert!(!still_held(0x09, true, true), "V may have come up unseen");
         }
 
         /// Caps Lock and Fn are recorded from AppKit's flag events, Caps
