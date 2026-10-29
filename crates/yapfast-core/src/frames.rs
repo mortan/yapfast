@@ -8,10 +8,14 @@
 //! removed once the worker has it open, so the memory returns when both
 //! processes let go. Windows won't remove a mapped file, so there it's a
 //! temporary file, kept in memory while it fits, that goes once the last
-//! process closes it.
+//! process closes it. macOS has no runtime directory, and its temporary one is
+//! on disk, so there it's a POSIX shared memory object, which is memory and
+//! loses its name the same way.
 
+#[cfg(not(target_os = "macos"))]
+use std::fs::OpenOptions;
 use std::{
-    fs::{File, OpenOptions},
+    fs::File,
     path::{Path, PathBuf},
     sync::{
         Mutex,
@@ -100,8 +104,11 @@ pub struct Frames {
 }
 
 /// What keeps the file's name until [`Frames::unlink`].
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 type Name = tempfile::TempPath;
+
+#[cfg(target_os = "macos")]
+use shm::Name;
 
 #[cfg(windows)]
 struct Name {
@@ -119,7 +126,7 @@ impl std::ops::Deref for Name {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(not(any(windows, target_os = "macos")))]
 fn create_file(directory: PathBuf) -> std::io::Result<(File, Name)> {
     let file = tempfile::Builder::new()
         .prefix("yapfast-frames-")
@@ -160,6 +167,101 @@ fn create_file(directory: PathBuf) -> std::io::Result<(File, Name)> {
     }
 }
 
+/// Opens the file the UI created, for the worker.
+#[cfg(not(target_os = "macos"))]
+fn open_file(path: &Path) -> std::io::Result<File> {
+    OpenOptions::new().read(true).write(true).open(path)
+}
+
+#[cfg(target_os = "macos")]
+use shm::open as open_file;
+
+/// The frames as a POSIX shared memory object, whose name passes for the
+/// file's path. Its memory is anonymous, as the runtime directory's is on
+/// Linux, where a file in macOS's temporary directory would belong to the disk.
+#[cfg(target_os = "macos")]
+mod shm {
+    use std::{
+        ffi::{CString, c_char, c_int, c_uint},
+        fs::File,
+        io,
+        os::{fd::FromRawFd, unix::ffi::OsStrExt},
+        path::{Path, PathBuf},
+        sync::atomic::{AtomicUsize, Ordering},
+    };
+
+    unsafe extern "C" {
+        fn shm_open(name: *const c_char, flags: c_int, ...) -> c_int;
+        fn shm_unlink(name: *const c_char) -> c_int;
+    }
+
+    // From macOS's <sys/fcntl.h>.
+    const O_RDWR: c_int = 0x0002;
+    const O_CREAT: c_int = 0x0200;
+    const O_EXCL: c_int = 0x0800;
+
+    /// The object's name, removed when this drops.
+    pub struct Name(PathBuf);
+
+    impl std::ops::Deref for Name {
+        type Target = Path;
+
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Name {
+        fn drop(&mut self) {
+            if let Ok(name) = c_name(&self.0) {
+                // SAFETY: a valid C string.
+                unsafe { shm_unlink(name.as_ptr()) };
+            }
+        }
+    }
+
+    fn c_name(path: &Path) -> io::Result<CString> {
+        Ok(CString::new(path.as_os_str().as_bytes())?)
+    }
+
+    fn open_with(path: &Path, flags: c_int) -> io::Result<File> {
+        let name = c_name(path)?;
+        // SAFETY: a valid C string; the mode, passed as the variadic
+        // argument's promoted type, counts only when it creates the object.
+        let fd = unsafe { shm_open(name.as_ptr(), flags, 0o600 as c_uint) };
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        // SAFETY: shm_open just opened it, and nothing else owns it.
+        Ok(unsafe { File::from_raw_fd(fd) })
+    }
+
+    /// Creates a new object, empty until it's sized.
+    pub fn create() -> io::Result<(File, Name)> {
+        static CREATED: AtomicUsize = AtomicUsize::new(0);
+        loop {
+            // macOS takes names of up to 31 bytes.
+            let path = PathBuf::from(format!(
+                "/yapfast-frames-{}-{}",
+                std::process::id(),
+                CREATED.fetch_add(1, Ordering::Relaxed)
+            ));
+            match open_with(&path, O_RDWR | O_CREAT | O_EXCL) {
+                Ok(file) => return Ok((file, Name(path))),
+                // Left by an earlier Yapfast with this process id that ended
+                // before its worker opened it.
+                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => {}
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    /// Opens the object the UI created, by its name.
+    pub fn open(path: &Path) -> io::Result<File> {
+        open_with(path, O_RDWR)
+    }
+}
+
 impl std::fmt::Debug for Frames {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
@@ -172,12 +274,16 @@ impl std::fmt::Debug for Frames {
 impl Frames {
     /// Creates a file for frames up to `width` by `height` pixels.
     pub fn create(width: u32, height: u32) -> Result<Self> {
-        let directory = std::env::var_os("XDG_RUNTIME_DIR")
-            .map(PathBuf::from)
-            .filter(|directory| directory.is_dir())
-            .unwrap_or_else(std::env::temp_dir);
-        let (file, name) =
-            create_file(directory).context("could not create the video frames file")?;
+        #[cfg(not(target_os = "macos"))]
+        let created = create_file(
+            std::env::var_os("XDG_RUNTIME_DIR")
+                .map(PathBuf::from)
+                .filter(|directory| directory.is_dir())
+                .unwrap_or_else(std::env::temp_dir),
+        );
+        #[cfg(target_os = "macos")]
+        let created = shm::create();
+        let (file, name) = created.context("could not create the video frames file")?;
         let capacity = capacity(width, height);
         file.set_len((HEADER + SLOTS as usize * capacity) as u64)
             .context("could not size the video frames file")?;
@@ -254,11 +360,7 @@ pub struct Writer {
 
 impl Writer {
     pub fn open(path: &Path) -> Result<Self> {
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(path)
-            .context("could not open the video frames file")?;
+        let file = open_file(path).context("could not open the video frames file")?;
         Ok(Self {
             mapping: Mapping::open(&file)?,
             back: 0,
@@ -311,6 +413,7 @@ mod tests {
         assert!(frames.path().is_none());
         if cfg!(not(windows)) {
             assert!(!path.exists());
+            assert!(Writer::open(&path).is_err(), "its name is gone");
         }
         assert!(frames.take(|_, _, _| ()).is_none(), "nothing yet");
         assert!(writer.fits(2, 4) && !writer.fits(5, 2));

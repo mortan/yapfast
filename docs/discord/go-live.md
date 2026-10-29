@@ -38,7 +38,12 @@ names a deleted file once a rebuild or update replaces it; elsewhere, the
 running Yapfast's path. Frames reach the UI through `frames`, a triple buffer in a memory-mapped
 file in the runtime directory. The file is unlinked once the worker opens it.
 Windows won't delete a mapped file, so there it's a temporary file that
-Windows deletes once both processes close it.
+Windows deletes once both processes close it. macOS's temporary directory is
+on disk, so there the frames are a POSIX shared memory object (`shm_open`),
+whose name the worker opens and which is unlinked the same way. Its memory is
+anonymous, so `footprint` counts it in both processes, though it's there
+once: 25 MB while watching or playing at 1080p, 11 MB for a shared screen's
+preview.
 On Linux, libwebrtc's capturer asks the screen sharing portal what to share.
 The portal answers over D-Bus through GLib, so the worker runs GLib's main
 context while it waits for the dialog and for frames. Yapfast tells Discord it's
