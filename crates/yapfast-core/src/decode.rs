@@ -260,4 +260,151 @@ mod tests {
             );
         }
     }
+
+    /// What VideoToolbox is given of a stream's parameter sets.
+    #[cfg(target_os = "macos")]
+    mod videotoolbox {
+        use super::*;
+
+        /// A recording's access units, each as its NAL units.
+        fn access_units(file: &[u8]) -> Vec<Vec<&[u8]>> {
+            let mut units: Vec<Vec<&[u8]>> = vec![];
+            for nal in yapfast_discord::rtp::nal_units(file) {
+                // Each starts with a delimiter.
+                if nal[0] & 0x1f == 9 {
+                    units.push(vec![]);
+                }
+                units.last_mut().unwrap().push(nal);
+            }
+            units
+        }
+
+        fn annex_b(nals: &[impl AsRef<[u8]>]) -> Vec<u8> {
+            nals.iter()
+                .flat_map(|nal| [&[0, 0, 0, 1][..], nal.as_ref()].concat())
+                .collect()
+        }
+
+        /// A NAL unit's bits after its header, without its emulation
+        /// prevention bytes.
+        fn payload(nal: &[u8]) -> Vec<bool> {
+            let (mut bytes, mut zeros) = (vec![], 0);
+            for &byte in &nal[1..] {
+                if zeros >= 2 && byte == 3 {
+                    zeros = 0;
+                    continue;
+                }
+                zeros = if byte == 0 { zeros + 1 } else { 0 };
+                bytes.push(byte);
+            }
+            bytes
+                .iter()
+                .flat_map(|byte| (0..8).rev().map(move |bit| byte >> bit & 1 == 1))
+                .collect()
+        }
+
+        /// A NAL unit of `header` and `bits`, with emulation prevention
+        /// bytes.
+        fn escape(header: u8, bits: &[bool]) -> Vec<u8> {
+            assert_eq!(bits.len() % 8, 0);
+            let (mut nal, mut zeros) = (vec![header], 0);
+            for chunk in bits.chunks(8) {
+                let byte = chunk
+                    .iter()
+                    .fold(0u8, |byte, &bit| byte << 1 | u8::from(bit));
+                if zeros >= 2 && byte <= 3 {
+                    nal.push(3);
+                    zeros = 0;
+                }
+                zeros = if byte == 0 { zeros + 1 } else { 0 };
+                nal.push(byte);
+            }
+            nal
+        }
+
+        fn read_ue(bits: &[bool], at: &mut usize) -> u32 {
+            let zeros = bits[*at..].iter().take_while(|bit| !**bit).count();
+            let coded = bits[*at + zeros..=*at + 2 * zeros]
+                .iter()
+                .fold(0, |value, &bit| value << 1 | u32::from(bit));
+            *at += 2 * zeros + 1;
+            coded - 1
+        }
+
+        fn ue(value: u32) -> Vec<bool> {
+            let coded = value + 1;
+            let length = 32 - coded.leading_zeros();
+            let mut bits = vec![false; length as usize - 1];
+            bits.extend((0..length).rev().map(|bit| coded >> bit & 1 == 1));
+            bits
+        }
+
+        /// A PPS of id 0, or a slice naming it, made to say `id`: 15 takes
+        /// a byte more than 0, so the rest stays aligned.
+        fn with_pps_id(nal: &[u8], id: u32) -> Vec<u8> {
+            let bits = payload(nal);
+            let mut at = 0;
+            let mut named = vec![];
+            // A slice names its first macroblock and its type first.
+            if nal[0] & 0x1f != 8 {
+                for _ in 0..2 {
+                    named.extend(ue(read_ue(&bits, &mut at)));
+                }
+            }
+            assert_eq!(read_ue(&bits, &mut at), 0);
+            named.extend(ue(id));
+            named.extend(&bits[at..]);
+            escape(nal[0], &named)
+        }
+
+        /// Two PPSs, ids 0 and 15, before every picture, each first in
+        /// turn, and slices that name 15: each picture decodes as it does
+        /// with the one PPS, so neither PPS displaces the other, nor
+        /// makes the decoder start over without its reference pictures.
+        #[test]
+        fn keeps_parameter_sets_by_their_ids() {
+            let file = fixture("stream-h264.h264");
+            let units = access_units(&file);
+            let pictures = |units: &[Vec<u8>]| -> Vec<Vec<u8>> {
+                let mut decoder = Decoder::new(Codec::H264).unwrap();
+                let mut rgba = vec![0; 320 * 180 * 4];
+                units
+                    .iter()
+                    .map(|unit| {
+                        let picture = decoder.decode(unit).unwrap().expect("a picture");
+                        picture.to_rgba(&mut rgba);
+                        rgba.clone()
+                    })
+                    .collect()
+            };
+            let pps = units.iter().flatten().find(|nal| nal[0] & 0x1f == 8);
+            let pps = pps.unwrap().to_vec();
+            let both = [with_pps_id(&pps, 15), pps];
+            let named: Vec<Vec<u8>> = units
+                .iter()
+                .enumerate()
+                .map(|(index, unit)| {
+                    let mut nals = vec![];
+                    for nal in unit {
+                        match nal[0] & 0x1f {
+                            8 => {}
+                            1 | 5 => {
+                                if !nals.iter().any(|nal: &Vec<u8>| nal[0] & 0x1f == 8) {
+                                    nals.push(both[index % 2].clone());
+                                    nals.push(both[1 - index % 2].clone());
+                                }
+                                nals.push(with_pps_id(nal, 15));
+                            }
+                            _ => nals.push(nal.to_vec()),
+                        }
+                    }
+                    annex_b(&nals)
+                })
+                .collect();
+            let plain: Vec<Vec<u8>> = units.iter().map(|unit| annex_b(unit)).collect();
+            let (plain, named) = (pictures(&plain), pictures(&named));
+            assert_eq!(plain.len(), 30);
+            assert!(plain == named, "the pictures with two PPSs differ");
+        }
+    }
 }

@@ -2,8 +2,9 @@
  * macOS libwebrtc archive has no H264 or HEVC decoder, since WebRTC there
  * decodes with VideoToolbox too. Access units come as Annex B (Go Live) or
  * length-prefixed with an avcC record (files); either way they're rewritten
- * with 4-byte lengths and their parameter sets taken out, which re-create the
- * session when they change. Decoding is synchronous, and pictures leave as
+ * with 4-byte lengths and their parameter sets taken out. Those are kept by
+ * kind and id, and one that's new or changed opens another session with all
+ * of them. Decoding is synchronous, and pictures leave as
  * I420 converted from VideoToolbox's NV12 into one reused buffer. */
 #include "vtdec.h"
 
@@ -20,11 +21,18 @@
 /* H264's most reference pictures: no stream holds back more than these. */
 enum { HELD = 17 };
 
-/* The SPS bytes read for its colours and reordering; past them, it reads as
- * zeros, as if it said nothing more. */
-enum { SPS_BYTES = 256 };
+/* The bytes of a parameter set read for its id, or an SPS's for its colours
+ * and reordering; past them, it reads as zeros, as if it said nothing more. */
+enum { SET_BYTES = 256 };
+
+/* The most parameter sets kept: more ids than an encoder uses. */
+enum { SETS = 32 };
 
 struct parameter_set {
+  /* H264's SPS or PPS, or H265's VPS, SPS or PPS, as set_kind numbers
+   * them. */
+  int kind;
+  unsigned id;
   uint8_t *data;
   size_t size;
   size_t capacity;
@@ -40,8 +48,9 @@ struct vtdec {
   int reorder;
   /* The bytes of a sample's length prefixes, or 0 for Annex B. */
   int length_size;
-  /* H264's SPS and PPS, or H265's VPS, SPS and PPS: the last of each. */
-  struct parameter_set sets[3];
+  /* The last parameter set of each kind and id. */
+  struct parameter_set sets[SETS];
+  int set_count;
   int changed;
   CMVideoFormatDescriptionRef format;
   VTDecompressionSessionRef session;
@@ -61,12 +70,13 @@ struct vtdec {
   size_t i420_size;
 };
 
-static int set_count(const struct vtdec *decoder) {
+static int kinds(const struct vtdec *decoder) {
   return decoder->codec == VTDEC_HEVC ? 3 : 2;
 }
 
-/* Which of `sets` a NAL unit is, -1 for none, or -2 for one left out. */
-static int set_index(const struct vtdec *decoder, const uint8_t *nal) {
+/* Which kind of parameter set a NAL unit is, -1 for none, or -2 for one left
+ * out. */
+static int set_kind(const struct vtdec *decoder, const uint8_t *nal) {
   if (decoder->codec == VTDEC_HEVC) {
     int type = (nal[0] >> 1) & 0x3f;
     /* VPS, SPS, PPS; then the access unit delimiter. */
@@ -74,22 +84,6 @@ static int set_index(const struct vtdec *decoder, const uint8_t *nal) {
   }
   int type = nal[0] & 0x1f;
   return type == 7 ? 0 : type == 8 ? 1 : type == 9 ? -2 : -1;
-}
-
-/* Keeps a parameter set, noting whether it changed. */
-static int keep_set(struct vtdec *decoder, int index, const uint8_t *nal, size_t size) {
-  struct parameter_set *set = &decoder->sets[index];
-  if (set->size == size && memcmp(set->data, nal, size) == 0) return 0;
-  if (set->capacity < size) {
-    uint8_t *grown = realloc(set->data, size);
-    if (!grown) return -3;
-    set->data = grown;
-    set->capacity = size;
-  }
-  memcpy(set->data, nal, size);
-  set->size = size;
-  decoder->changed = 1;
-  return 0;
 }
 
 /* The next NAL unit at `*at`: 1 with one, 0 at the end, -1 when a length
@@ -123,12 +117,27 @@ static int next_nal(const struct vtdec *decoder, const uint8_t *data, size_t siz
   }
 }
 
-/* An SPS's bits, read past the emulation prevention bytes. */
+/* A parameter set's bits, read past the emulation prevention bytes. */
 struct bits {
-  uint8_t data[SPS_BYTES];
+  uint8_t data[SET_BYTES];
   size_t size;
   size_t at;
 };
+
+/* Reads the bits of `nal` after its `header` bytes. */
+static void read_payload(struct bits *bits, const uint8_t *nal, size_t size, size_t header) {
+  bits->size = 0;
+  bits->at = 0;
+  int zeros = 0;
+  for (size_t index = header; index < size && bits->size < SET_BYTES; index++) {
+    if (zeros >= 2 && nal[index] == 3) {
+      zeros = 0;
+      continue;
+    }
+    zeros = nal[index] ? 0 : zeros + 1;
+    bits->data[bits->size++] = nal[index];
+  }
+}
 
 static unsigned read_bit(struct bits *bits) {
   size_t at = bits->at++;
@@ -196,16 +205,8 @@ static int max_dpb_frames(int level, unsigned macroblocks) {
  * pictures can be decoded, how many it reorders, and its colours. 0, or -2
  * for 4:2:2, 4:4:4 or more than 8 bits, which VideoToolbox doesn't decode. */
 static int read_sps(struct vtdec *decoder, const uint8_t *nal, size_t size) {
-  struct bits bits = {.size = 0};
-  int zeros = 0;
-  for (size_t index = 1; index < size && bits.size < SPS_BYTES; index++) {
-    if (zeros >= 2 && nal[index] == 3) {
-      zeros = 0;
-      continue;
-    }
-    zeros = nal[index] ? 0 : zeros + 1;
-    bits.data[bits.size++] = nal[index];
-  }
+  struct bits bits;
+  read_payload(&bits, nal, size, 1);
   int profile = (int)read_bits(&bits, 8);
   read_bits(&bits, 8);
   int level = (int)read_bits(&bits, 8);
@@ -294,6 +295,90 @@ static int read_sps(struct vtdec *decoder, const uint8_t *nal, size_t size) {
   return 0;
 }
 
+/* Skips H265's profile_tier_level, with `sublayers` past the first. */
+static void skip_profile_tier_level(struct bits *bits, unsigned sublayers) {
+  /* The general profile, its flags and its level. */
+  bits->at += 96;
+  unsigned present = read_bits(bits, 2 * (int)sublayers);
+  if (sublayers > 0) bits->at += 2 * (8 - sublayers);
+  for (unsigned layer = 0; layer < sublayers; layer++) {
+    unsigned flags = present >> (2 * (sublayers - 1 - layer)) & 3;
+    /* A sublayer's profile, then its level. */
+    if (flags & 2) bits->at += 88;
+    if (flags & 1) bits->at += 8;
+  }
+}
+
+/* A parameter set's id, or -1 for a damaged one. */
+static int set_id(const struct vtdec *decoder, int kind, const uint8_t *nal, size_t size) {
+  struct bits bits;
+  unsigned id, ids;
+  if (decoder->codec == VTDEC_H264) {
+    read_payload(&bits, nal, size, 1);
+    /* An SPS's follows its profile, constraints and level. */
+    if (kind == 0) bits.at += 24;
+    id = read_ue(&bits);
+    ids = kind == 0 ? 32 : 256;
+  } else {
+    read_payload(&bits, nal, size, 2);
+    if (kind == 0) {
+      id = read_bits(&bits, 4);
+      ids = 16;
+    } else if (kind == 1) {
+      /* An SPS's follows its VPS's, its sublayers and their profiles. */
+      bits.at += 4;
+      unsigned sublayers = read_bits(&bits, 3);
+      bits.at += 1;
+      skip_profile_tier_level(&bits, sublayers);
+      id = read_ue(&bits);
+      ids = 16;
+    } else {
+      id = read_ue(&bits);
+      ids = 64;
+    }
+  }
+  return id < ids && bits.at <= bits.size * 8 ? (int)id : -1;
+}
+
+/* The first parameter set of `kind` kept, or NULL. */
+static const struct parameter_set *first_set(const struct vtdec *decoder, int kind) {
+  for (int index = 0; index < decoder->set_count; index++) {
+    const struct parameter_set *set = &decoder->sets[index];
+    if (set->kind == kind && set->size) return set;
+  }
+  return NULL;
+}
+
+/* Keeps a parameter set in place of the last of its kind and id, noting
+ * whether that changes what's kept. 0, -1 for a damaged one or one too
+ * many, or -3 out of memory. */
+static int keep_set(struct vtdec *decoder, int kind, const uint8_t *nal, size_t size) {
+  int id = set_id(decoder, kind, nal, size);
+  if (id < 0) return -1;
+  struct parameter_set *set = NULL;
+  for (int index = 0; index < decoder->set_count && !set; index++) {
+    struct parameter_set *kept = &decoder->sets[index];
+    if (kept->kind == kind && kept->id == (unsigned)id) set = kept;
+  }
+  if (!set) {
+    if (decoder->set_count == SETS) return -1;
+    set = &decoder->sets[decoder->set_count++];
+    set->kind = kind;
+    set->id = (unsigned)id;
+  }
+  if (set->size == size && memcmp(set->data, nal, size) == 0) return 0;
+  if (set->capacity < size) {
+    uint8_t *grown = realloc(set->data, size);
+    if (!grown) return -3;
+    set->data = grown;
+    set->capacity = size;
+  }
+  memcpy(set->data, nal, size);
+  set->size = size;
+  decoder->changed = 1;
+  return 0;
+}
+
 static void drop_session(struct vtdec *decoder) {
   if (decoder->session) {
     VTDecompressionSessionInvalidate(decoder->session);
@@ -316,20 +401,26 @@ static void output(void *opaque, void *frame, OSStatus status, VTDecodeInfoFlags
   if (status == noErr && image && !decoder->decoded) decoder->decoded = CVPixelBufferRetain(image);
 }
 
-/* A session for the parameter sets kept. */
+/* A session for the parameter sets kept, every one of them. */
 static int open_session(struct vtdec *decoder, int max_side) {
   drop_session(decoder);
-  const uint8_t *sets[3];
-  size_t sizes[3];
-  for (int index = 0; index < set_count(decoder); index++) {
-    sets[index] = decoder->sets[index].data;
-    sizes[index] = decoder->sets[index].size;
+  const uint8_t *sets[SETS];
+  size_t sizes[SETS];
+  size_t count = 0;
+  /* By kind: H265's VPSs, then the SPSs, then the PPSs. */
+  for (int kind = 0; kind < kinds(decoder); kind++) {
+    for (int index = 0; index < decoder->set_count; index++) {
+      const struct parameter_set *set = &decoder->sets[index];
+      if (set->kind != kind || !set->size) continue;
+      sets[count] = set->data;
+      sizes[count++] = set->size;
+    }
   }
   OSStatus status =
       decoder->codec == VTDEC_HEVC
-          ? CMVideoFormatDescriptionCreateFromHEVCParameterSets(NULL, 3, sets, sizes, 4, NULL,
+          ? CMVideoFormatDescriptionCreateFromHEVCParameterSets(NULL, count, sets, sizes, 4, NULL,
                                                                 &decoder->format)
-          : CMVideoFormatDescriptionCreateFromH264ParameterSets(NULL, 2, sets, sizes, 4,
+          : CMVideoFormatDescriptionCreateFromH264ParameterSets(NULL, count, sets, sizes, 4,
                                                                 &decoder->format);
   if (status != noErr) return -1;
   CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(decoder->format);
@@ -337,7 +428,9 @@ static int open_session(struct vtdec *decoder, int max_side) {
     return -2;
   }
   if (decoder->codec == VTDEC_H264) {
-    int read = read_sps(decoder, sets[0], sizes[0]);
+    /* The first SPS tells the reordering and colours. */
+    const struct parameter_set *sps = first_set(decoder, 0);
+    int read = read_sps(decoder, sps->data, sps->size);
     if (read < 0) return read;
   } else {
     decoder->delay = 0;
@@ -388,7 +481,7 @@ void vtdec_free(struct vtdec *decoder) {
   if (!decoder) return;
   vtdec_flush(decoder);
   drop_session(decoder);
-  for (int index = 0; index < 3; index++) free(decoder->sets[index].data);
+  for (int index = 0; index < decoder->set_count; index++) free(decoder->sets[index].data);
   free(decoder->sample);
   free(decoder->i420);
   free(decoder);
@@ -396,14 +489,14 @@ void vtdec_free(struct vtdec *decoder) {
 
 int vtdec_configure(struct vtdec *decoder, const uint8_t *record, size_t size) {
   /* avcC: version 1, profile, compatibility, level, length size, then the
-   * SPSs and the PPSs, each with its size. The first of each is kept. */
+   * SPSs and the PPSs, each with its size. */
   if (decoder->codec != VTDEC_H264 || size < 7 || record[0] != 1) return -1;
   int length_size = (record[4] & 3) + 1;
   if (length_size == 3) return -1;
   size_t at = 5;
-  for (int index = 0; index < 2; index++) {
+  for (int kind = 0; kind < 2; kind++) {
     if (at >= size) return -1;
-    int count = index == 0 ? record[at] & 0x1f : record[at];
+    int count = kind == 0 ? record[at] & 0x1f : record[at];
     at++;
     if (count == 0) return -1;
     for (int set = 0; set < count; set++) {
@@ -411,12 +504,14 @@ int vtdec_configure(struct vtdec *decoder, const uint8_t *record, size_t size) {
       size_t length = (size_t)record[at] << 8 | record[at + 1];
       at += 2;
       if (length == 0 || length > size - at) return -1;
-      if (set == 0 && keep_set(decoder, index, record + at, length) < 0) return -3;
+      int kept = keep_set(decoder, kind, record + at, length);
+      if (kept < 0) return kept;
       at += length;
     }
   }
   decoder->length_size = length_size;
-  return read_sps(decoder, decoder->sets[0].data, decoder->sets[0].size);
+  const struct parameter_set *sps = first_set(decoder, 0);
+  return read_sps(decoder, sps->data, sps->size);
 }
 
 /* Appends a NAL unit with a 4-byte length to the sample. */
@@ -447,17 +542,17 @@ int vtdec_decode(struct vtdec *decoder, const uint8_t *data, size_t size, int64_
   size_t nal_size;
   int got;
   while ((got = next_nal(decoder, data, size, &at, &nal, &nal_size)) > 0) {
-    int index = set_index(decoder, nal);
-    int result = index >= 0    ? keep_set(decoder, index, nal, nal_size)
-                 : index == -1 ? append(decoder, &sample_size, nal, nal_size)
-                               : 0;
+    int kind = set_kind(decoder, nal);
+    int result = kind >= 0    ? keep_set(decoder, kind, nal, nal_size)
+                 : kind == -1 ? append(decoder, &sample_size, nal, nal_size)
+                              : 0;
     if (result < 0) return result;
   }
   if (got < 0) return -1;
   if (decoder->changed || !decoder->session) {
-    for (int index = 0; index < set_count(decoder); index++) {
+    for (int kind = 0; kind < kinds(decoder); kind++) {
       /* Pictures before their parameter sets can't be decoded. */
-      if (!decoder->sets[index].size) return sample_size ? -1 : 0;
+      if (!first_set(decoder, kind)) return sample_size ? -1 : 0;
     }
     int opened = open_session(decoder, max_side);
     if (opened < 0) {
