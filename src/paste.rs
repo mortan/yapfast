@@ -16,15 +16,6 @@ pub enum Clipboard {
     Other,
 }
 
-/// Picture types Discord shows inline, best first, with their extensions.
-#[cfg(target_os = "linux")]
-const PICTURES: [(&str, &str); 4] = [
-    ("image/png", "png"),
-    ("image/gif", "gif"),
-    ("image/webp", "webp"),
-    ("image/jpeg", "jpg"),
-];
-
 /// Reads the clipboard. Blocks while the copying app sends its data, so it
 /// runs off the UI thread; Yapfast itself may be that app.
 pub fn read() -> Clipboard {
@@ -74,7 +65,15 @@ mod wayland {
 
     use wl_clipboard_rs::paste::{ClipboardType, Error, MimeType, Seat, get_contents};
 
-    use super::{Clipboard, PICTURES, files};
+    use super::{Clipboard, files};
+
+    /// Picture types Discord shows inline, best first, with their extensions.
+    const PICTURES: [(&str, &str); 4] = [
+        ("image/png", "png"),
+        ("image/gif", "gif"),
+        ("image/webp", "webp"),
+        ("image/jpeg", "jpg"),
+    ];
 
     pub fn read() -> Result<Clipboard, Error> {
         let types =
