@@ -326,7 +326,8 @@ impl Adapter {
         );
         window.set_online(state.online);
         // Only the sign-in screen offers it, and finding out looks at the
-        // disk, or at what the OS credential store said when first read.
+        // disk, or at what the OS credential store last said, without
+        // reading it.
         if !workspace {
             window.set_restore_available(yapfast_core::chat::can_restore(&self.root));
         }

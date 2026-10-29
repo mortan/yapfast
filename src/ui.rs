@@ -116,7 +116,7 @@ pub fn run(
     pictures::make_frames_in_slint_buffers();
     // Started at sign-in, Yapfast goes to the tray with the saved session.
     // Without one there's nothing to do there but sign in, which needs the window.
-    let hidden = background && !preview && yapfast_core::chat::can_restore(&root);
+    let hidden = background && !preview && yapfast_core::chat::restores_hidden(&root);
     // Request the graphics API explicitly so Slint cannot silently replace a
     // failed GPU surface; Yapfast owns the fallback and tells the user about it.
     // Windows draws the GPU setting with Direct3D 12; see [`graphics`].

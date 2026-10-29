@@ -51,7 +51,7 @@ impl std::error::Error for NotLinked {}
 pub fn store(token: &str) -> Result<()> {
     let token = clean(token)?;
     save(&token)?;
-    *known() = Some(Known::Token(token));
+    known().set(Known::Token(token));
     Ok(())
 }
 
@@ -71,7 +71,7 @@ const UNREADABLE: &str = "could not read the token from the OS credential store"
 
 /// What the credential store last said of the linked account. Linking and
 /// unlinking keep it current, so asking again reads nothing: on macOS each
-/// read of the Keychain may ask the person.
+/// read of the Keychain may ask the person, and waits for the answer.
 enum Known {
     Token(String),
     NotLinked,
@@ -82,9 +82,33 @@ enum Known {
     },
 }
 
-fn known() -> MutexGuard<'static, Option<Known>> {
-    static KNOWN: Mutex<Option<Known>> = Mutex::new(None);
-    KNOWN.lock().unwrap_or_else(PoisonError::into_inner)
+/// [`Known`], and how many times linking or unlinking changed it: a read
+/// takes no lock while it waits, and its answer doesn't replace one that
+/// came meanwhile.
+#[derive(Default)]
+struct Kept {
+    known: Option<Known>,
+    changes: u64,
+}
+
+impl Kept {
+    fn set(&mut self, known: Known) {
+        self.known = Some(known);
+        self.changes += 1;
+    }
+}
+
+static KNOWN: Mutex<Kept> = Mutex::new(Kept {
+    known: None,
+    changes: 0,
+});
+
+fn known() -> MutexGuard<'static, Kept> {
+    lock(&KNOWN)
+}
+
+fn lock(kept: &Mutex<Kept>) -> MutexGuard<'_, Kept> {
+    kept.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 impl Known {
@@ -95,17 +119,41 @@ impl Known {
             Err(_) => Self::Unreadable { told },
         }
     }
+
+    fn linked(&self) -> Result<bool> {
+        match self {
+            Self::Token(_) => Ok(true),
+            Self::NotLinked => Ok(false),
+            Self::Unreadable { .. } => bail!(UNREADABLE),
+        }
+    }
+}
+
+/// Reads the store without holding `kept`, which others may ask meanwhile,
+/// and keeps its answer unless linking or unlinking changed it first.
+fn read_into(
+    kept: &Mutex<Kept>,
+    told: bool,
+    read: impl FnOnce() -> Result<String>,
+) -> Result<String> {
+    let changes = lock(kept).changes;
+    let read = read();
+    let mut kept = lock(kept);
+    if kept.changes == changes {
+        kept.known = Some(Known::of(&read, told));
+    }
+    read
 }
 
 /// The linked account's token, read from the store unless it was read or
 /// linked before. A store that couldn't be read is read again, but its
 /// first failure, found by [`linked`], is answered without reading.
 pub fn load() -> Result<String> {
-    load_from(&mut known(), read)
+    load_from(&KNOWN, read)
 }
 
-fn load_from(known: &mut Option<Known>, read: impl FnOnce() -> Result<String>) -> Result<String> {
-    match known {
+fn load_from(kept: &Mutex<Kept>, read: impl FnOnce() -> Result<String>) -> Result<String> {
+    match &mut lock(kept).known {
         Some(Known::Token(token)) => return Ok(token.clone()),
         Some(Known::Unreadable { told }) if !*told => {
             *told = true;
@@ -113,24 +161,32 @@ fn load_from(known: &mut Option<Known>, read: impl FnOnce() -> Result<String>) -
         }
         _ => {}
     }
-    let read = read();
-    *known = Some(Known::of(&read, true));
-    read
+    read_into(kept, true, read)
 }
 
 /// Whether an account is linked on this device, as the store said the last
-/// time it was read: only the first call reads it. An error says it
-/// couldn't be read.
+/// time it was read: only the first call reads it, which may wait for the
+/// person on macOS. An error says it couldn't be read.
 pub fn linked() -> Result<bool> {
-    linked_from(&mut known(), read)
+    linked_from(&KNOWN, read)
 }
 
-fn linked_from(known: &mut Option<Known>, read: impl FnOnce() -> Result<String>) -> Result<bool> {
-    match known.get_or_insert_with(|| Known::of(&read(), false)) {
-        Known::Token(_) => Ok(true),
-        Known::NotLinked => Ok(false),
-        Known::Unreadable { .. } => bail!(UNREADABLE),
+fn linked_from(kept: &Mutex<Kept>, read: impl FnOnce() -> Result<String>) -> Result<bool> {
+    if let Some(known) = &lock(kept).known {
+        return known.linked();
     }
+    read_into(kept, false, read)
+        .map(|_| true)
+        .or_else(|error| match error.is::<NotLinked>() {
+            true => Ok(false),
+            false => Err(error),
+        })
+}
+
+/// What [`linked`] would say without reading the store: None until it, or
+/// [`load`], has read it, or an account was linked or unlinked.
+pub fn linked_known() -> Option<Result<bool>> {
+    known().known.as_ref().map(Known::linked)
 }
 
 /// Reads the token from the store, moving one the first probe kept.
@@ -187,7 +243,11 @@ pub(crate) fn cache_key() -> Result<crate::cache::Key> {
 pub fn forget() -> Result<()> {
     crate::cache::forget();
     // Until it's gone, whether it is is read again.
-    *known() = None;
+    {
+        let mut kept = known();
+        kept.known = None;
+        kept.changes += 1;
+    }
     if crate::client::test_server().is_some() {
         *test_link()
             .lock()
@@ -200,7 +260,7 @@ pub fn forget() -> Result<()> {
             }
         }
     }
-    *known() = Some(Known::NotLinked);
+    known().set(Known::NotLinked);
     Ok(())
 }
 
@@ -225,33 +285,47 @@ mod tests {
             reads.set(reads.get() + 1);
             bail!(UNREADABLE)
         };
-        let mut known = None;
-        assert!(linked_from(&mut known, failing).is_err());
-        assert!(linked_from(&mut known, failing).is_err());
+        let known = Mutex::default();
+        assert!(linked_from(&known, failing).is_err());
+        assert!(linked_from(&known, failing).is_err());
         assert_eq!(reads.get(), 1, "the sign-in screen asks without reading");
         // Restoring then says why without asking the person a second time.
-        assert!(load_from(&mut known, failing).is_err());
+        assert!(load_from(&known, failing).is_err());
         assert_eq!(reads.get(), 1);
         // Retrying reads again.
         let working = || -> Result<String> {
             reads.set(reads.get() + 1);
             Ok("token".into())
         };
-        assert_eq!(load_from(&mut known, working).unwrap(), "token");
+        assert_eq!(load_from(&known, working).unwrap(), "token");
         assert_eq!(reads.get(), 2);
-        assert_eq!(load_from(&mut known, working).unwrap(), "token");
-        assert!(linked_from(&mut known, working).unwrap());
+        assert_eq!(load_from(&known, working).unwrap(), "token");
+        assert!(linked_from(&known, working).unwrap());
         assert_eq!(reads.get(), 2, "the token read is kept");
 
-        let mut known = None;
+        let known = Mutex::default();
         let unlinked = || -> Result<String> { Err(NotLinked.into()) };
-        assert!(!linked_from(&mut known, unlinked).unwrap());
-        assert!(!linked_from(&mut known, failing).unwrap(), "kept");
-        assert!(
-            load_from(&mut known, unlinked)
-                .unwrap_err()
-                .is::<NotLinked>()
+        assert!(!linked_from(&known, unlinked).unwrap());
+        assert!(!linked_from(&known, failing).unwrap(), "kept");
+        assert!(load_from(&known, unlinked).unwrap_err().is::<NotLinked>());
+    }
+
+    /// A read, which may wait for the person, holds no lock, so the window
+    /// can ask what's known meanwhile; and a link made meanwhile stays.
+    #[test]
+    fn reads_without_holding_the_lock() {
+        let known = Mutex::default();
+        let read = || -> Result<String> {
+            assert!(known.try_lock().is_ok(), "the lock is free while reading");
+            lock(&known).set(Known::Token("linked meanwhile".into()));
+            Err(NotLinked.into())
+        };
+        assert!(load_from(&known, read).unwrap_err().is::<NotLinked>());
+        assert_eq!(
+            load_from(&known, || bail!("not read")).unwrap(),
+            "linked meanwhile"
         );
+        assert!(linked_from(&known, || bail!("not read")).unwrap());
     }
 
     #[test]

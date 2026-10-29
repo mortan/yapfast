@@ -3871,21 +3871,42 @@ pub fn notification_text(markdown: &str) -> String {
 }
 
 /// Whether Yapfast can start without the sign-in screen: with a saved Matrix
-/// session, or in a build without Matrix unless no Discord account is linked
-/// on this device. The OS credential store is read for that only the first
-/// time; one that couldn't be read restores too, which says why.
+/// session, or in a build without Matrix unless the OS credential store said
+/// no Discord account is linked on this device. It doesn't read the store,
+/// which on macOS may wait for the person: restoring reads it, off the UI's
+/// thread, and says why when it couldn't, or shows the sign-in screen when
+/// nothing is linked.
 pub fn can_restore(root: &std::path::Path) -> bool {
     #[cfg(feature = "matrix")]
     return root.join("active.json").exists();
     #[cfg(all(not(feature = "matrix"), feature = "discord"))]
     return {
         let _ = root;
-        !matches!(yapfast_discord::token::linked(), Ok(false))
+        !matches!(yapfast_discord::token::linked_known(), Some(Ok(false)))
     };
     #[cfg(not(any(feature = "matrix", feature = "discord")))]
     {
         let _ = root;
         true
+    }
+}
+
+/// Whether a start at sign-in can stay in the tray: with a saved session
+/// known to be there. In a build without Matrix that reads the OS credential
+/// store, before any window shows; a store that couldn't be read, as when
+/// the person refused, shows the window, which says why.
+pub fn restores_hidden(root: &std::path::Path) -> bool {
+    #[cfg(feature = "matrix")]
+    return root.join("active.json").exists();
+    #[cfg(all(not(feature = "matrix"), feature = "discord"))]
+    return {
+        let _ = root;
+        matches!(yapfast_discord::token::linked(), Ok(true))
+    };
+    #[cfg(not(any(feature = "matrix", feature = "discord")))]
+    {
+        let _ = root;
+        false
     }
 }
 
@@ -3964,12 +3985,14 @@ pub async fn run(
     {
         let refused = match start {
             Start::Login { .. } => Some("This build of Yapfast has no Matrix sign-in."),
+            // Nothing linked: the sign-in screen, with nothing to say.
             #[cfg(feature = "discord")]
-            Start::Restore if discord.is_none() => Some(
-                discord_error
-                    .as_deref()
-                    .unwrap_or("Link your Discord account to sign in."),
-            ),
+            Start::Restore if discord.is_none() && discord_error.is_none() => {
+                let _ = events.send(Event::LoggedOut);
+                return;
+            }
+            #[cfg(feature = "discord")]
+            Start::Restore if discord.is_none() => discord_error.as_deref(),
             #[cfg(not(feature = "discord"))]
             Start::Restore => Some("This build of Yapfast has no networks."),
             #[allow(unreachable_patterns)]
