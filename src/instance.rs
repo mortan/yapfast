@@ -2,8 +2,9 @@
 //! starting it again brings the running one's window forward and ends. The
 //! first start holds `instance.lock` in the folder, which the system lets go
 //! of when the process ends, and listens for later starts: on a Unix socket
-//! beside the lock, which carries the desktop's activation token, or on
-//! Windows a named event. See docs/tray.md.
+//! beside the lock, or where that path is too long for one in a short folder
+//! of the user's, which carries the desktop's activation token, or on Windows
+//! a named event. See docs/tray.md.
 
 use std::{fs::File, path::Path, time::Duration};
 
@@ -21,7 +22,8 @@ pub enum Start {
     /// Run, as the first on the folder or one more beside it.
     Run(Instance),
     /// Another Yapfast runs on the folder and was asked to show its window,
-    /// unless this start was for the tray only: nothing is left to do.
+    /// unless this start was for the tray only or it didn't answer: nothing
+    /// is left to do.
     Handed,
 }
 
@@ -74,8 +76,10 @@ fn claim_with(root: &Path, alone: bool, background: bool, token: Option<String>)
                 tracing::info!("Yapfast already runs; showed its window");
                 Start::Handed
             } else {
-                tracing::warn!("Yapfast already runs but didn't answer; starting another");
-                Start::Run(Instance::default())
+                // A second Yapfast on the folder, unasked, would write the
+                // same files as the first.
+                tracing::warn!("Yapfast already runs on this folder but didn't answer; ending");
+                Start::Handed
             }
         }
         Err(std::fs::TryLockError::Error(error)) => {
@@ -129,11 +133,69 @@ fn hand(root: &Path, token: Option<&str>) -> bool {
 #[cfg(unix)]
 fn ask(root: &Path, token: Option<&str>) -> std::io::Result<()> {
     use std::io::Write;
-    let mut stream = std::os::unix::net::UnixStream::connect(root.join(SOCKET))?;
+    let mut stream = std::os::unix::net::UnixStream::connect(socket(root))?;
     match token {
         Some(token) => writeln!(stream, "open {token}"),
         None => writeln!(stream, "open"),
     }
+}
+
+/// The socket's path: beside the lock where it fits a socket's address, which
+/// takes 103 bytes on macOS and 107 on Linux, or else named by a hash of the
+/// folder in a short folder of the user's own.
+#[cfg(unix)]
+fn socket(root: &Path) -> std::path::PathBuf {
+    let beside = root.join(SOCKET);
+    if beside.as_os_str().len() < 104 {
+        return beside;
+    }
+    let Some(folder) = short_folder() else {
+        return beside;
+    };
+    use std::os::unix::ffi::OsStrExt;
+    // The same folder by any path, as its lock is.
+    let root = std::fs::canonicalize(root).unwrap_or_else(|_| root.to_owned());
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325; // FNV-1a
+    for byte in root.as_os_str().as_bytes() {
+        hash = (hash ^ u64::from(*byte)).wrapping_mul(0x0100_0000_01b3);
+    }
+    folder.join(format!("yapfast-{hash:016x}.socket"))
+}
+
+/// macOS's cache folder for the user, under /var/folders: private, and
+/// unlike the temporary folder beside it not emptied of files three days
+/// old, as a socket a running Yapfast listens on would be.
+#[cfg(target_os = "macos")]
+fn short_folder() -> Option<std::path::PathBuf> {
+    use std::{
+        ffi::{OsStr, c_char, c_int},
+        os::unix::ffi::OsStrExt,
+    };
+    const _CS_DARWIN_USER_CACHE_DIR: c_int = 65538;
+    unsafe extern "C" {
+        fn confstr(name: c_int, buffer: *mut c_char, length: usize) -> usize;
+    }
+    let mut buffer = [0u8; 1024];
+    // SAFETY: confstr writes at most the buffer's length, NUL included, and
+    // says how long the whole value is.
+    let length = unsafe {
+        confstr(
+            _CS_DARWIN_USER_CACHE_DIR,
+            buffer.as_mut_ptr().cast(),
+            buffer.len(),
+        )
+    };
+    (1..=buffer.len())
+        .contains(&length)
+        .then(|| OsStr::from_bytes(&buffer[..length - 1]).into())
+}
+
+/// Linux's runtime folder for the user, private and short.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn short_folder() -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR")
+        .filter(|folder| !folder.is_empty())
+        .map(Into::into)
 }
 
 #[cfg(unix)]
@@ -142,7 +204,7 @@ struct Listener(Option<std::os::unix::net::UnixListener>);
 #[cfg(unix)]
 impl Listener {
     fn bind(root: &Path) -> Option<Self> {
-        let path = root.join(SOCKET);
+        let path = socket(root);
         // Holding the lock, this start is the only one: a socket there is a
         // gone Yapfast's.
         let _ = std::fs::remove_file(&path);
@@ -483,6 +545,36 @@ mod tests {
                 _lock: Some(_),
                 listener: Some(_)
             })
+        ));
+    }
+
+    /// A folder whose socket wouldn't fit beside the lock listens in a
+    /// short folder, and a first Yapfast that doesn't answer keeps the
+    /// folder its own.
+    #[test]
+    fn a_deep_folder_listens_elsewhere_and_stays_one() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("a-folder-deep-enough".repeat(4));
+        let Start::Run(mut first) = claim_with(&root, true, false, None) else {
+            panic!("the first start runs");
+        };
+        let path = socket(&root);
+        assert!(root.join(SOCKET).as_os_str().len() >= 104);
+        assert!(!path.starts_with(&root) && path.as_os_str().len() < 104);
+        let requests = opened(&mut first);
+        assert!(matches!(
+            claim_with(&root, true, false, None),
+            Start::Handed
+        ));
+        assert_eq!(requests.recv_timeout(Duration::from_secs(5)).unwrap(), None);
+
+        let Start::Run(mut second) = claim_with(parent.path(), true, false, None) else {
+            panic!("another folder runs");
+        };
+        second.listener = None;
+        assert!(matches!(
+            claim_with(parent.path(), true, false, None),
+            Start::Handed
         ));
     }
 }

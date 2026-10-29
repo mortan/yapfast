@@ -25,16 +25,23 @@ another `--data-dir` always starts. The preview never asks.
 
 The first start holds a lock on `instance.lock` in the folder, which the
 system lets go of when the process ends, so a crash leaves nothing to clean
-up. It listens on `instance.socket` beside it on Linux and macOS; on Windows
-on a named event, `Local\yapfast-` and a hash of the folder's path. A later start
-that finds the lock taken asks for the window there, trying for 5 seconds
-while the first may still be starting or restarting with another renderer,
-and starts anyway if nothing answers. On Linux it passes on the activation
-token the desktop launched it with (`XDG_ACTIVATION_TOKEN` on Wayland,
-`DESKTOP_STARTUP_ID` on X11), so the window can take the focus: a window made
-again takes it through winit, and a shown one through Yapfast's own
-`xdg_activation_v1` on winit's Wayland connection. On Windows the later start
-lets any process take the foreground, which the first then does.
+up. It listens on `instance.socket` beside it on Linux and macOS, or, where
+that path is too long for a socket's address (103 bytes on macOS), on
+`yapfast-` and a hash of the folder's path in a short private folder: the
+user's cache folder on macOS (`getconf DARWIN_USER_CACHE_DIR`), which unlike
+the temporary folder isn't emptied of files three days old, and
+`$XDG_RUNTIME_DIR` on Linux. On Windows it listens on a named event,
+`Local\yapfast-` and a hash of the folder's path. A later start that finds the
+lock taken asks for the window there, trying for 5 seconds while the first
+may still be starting or restarting with another renderer, and ends if
+nothing answers, as two Yapfasts on one folder run only when allowed. On
+Linux it passes on the activation token the desktop launched it with
+(`XDG_ACTIVATION_TOKEN` on Wayland, `DESKTOP_STARTUP_ID` on X11), so the
+window can take the focus: a window made again takes it through winit, and a
+shown one through Yapfast's own `xdg_activation_v1` on winit's Wayland
+connection. On Windows the later start lets any process take the foreground,
+which the first then does. On macOS the first activates itself, as opening
+the window from the menu-bar icon does.
 
 ## Starting at sign-in
 
