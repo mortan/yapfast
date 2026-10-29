@@ -60,6 +60,21 @@ fn path_text(path: PathBuf) -> std::io::Result<String> {
         .map_err(|path| std::io::Error::other(format!("{} isn't valid Unicode", path.display())))
 }
 
+/// Writes a file whole or not at all: a desktop or launchd reading it never
+/// sees half. Readable by all, as a package installs it, not the temporary
+/// file's 0600.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+pub(crate) fn write_whole(path: &std::path::Path, contents: &[u8]) -> std::io::Result<()> {
+    use std::{io::Write, os::unix::fs::PermissionsExt};
+    let folder = path.parent().expect("the file is in a folder");
+    std::fs::create_dir_all(folder)?;
+    let mut file = tempfile::NamedTempFile::new_in(folder)?;
+    file.write_all(contents)?;
+    file.as_file()
+        .set_permissions(std::fs::Permissions::from_mode(0o644))?;
+    file.persist(path).map(drop).map_err(|error| error.error)
+}
+
 /// One argument of the command line, quoted when it holds a space, as
 /// Windows splits a command line into arguments.
 #[cfg(any(windows, test))]
@@ -160,7 +175,7 @@ mod linux {
             exec.join(" "),
             crate::icon::APP_ID,
         );
-        desktop_entry::write(&entry(config), text.as_bytes())
+        super::write_whole(&entry(config), text.as_bytes())
     }
 
     #[cfg(test)]
@@ -386,9 +401,7 @@ mod macos {
     }
 
     fn home() -> Option<PathBuf> {
-        std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(PathBuf::from)
+        std::env::home_dir()
     }
 
     fn agent(home: &Path) -> PathBuf {
@@ -441,13 +454,7 @@ mod macos {
     }
 
     pub(super) fn write_agent(home: &Path, command: &[String]) -> std::io::Result<()> {
-        let path = agent(home);
-        let folder = path.parent().expect("the agent is in a folder");
-        std::fs::create_dir_all(folder)?;
-        // Whole or not at all: launchd may read it at any time.
-        let partial = path.with_extension("plist.partial");
-        std::fs::write(&partial, plist(command))?;
-        std::fs::rename(&partial, &path)
+        super::write_whole(&agent(home), plist(command).as_bytes())
     }
 
     #[cfg(test)]

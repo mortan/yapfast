@@ -14,7 +14,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use crate::icon::APP_ID;
+use crate::{autostart::write_whole as write, icon::APP_ID};
 
 /// The entry a package installs, whose Exec line names the AppImage instead.
 const ENTRY: &str = include_str!("../packaging/linux/io.github.yapfast.Yapfast.desktop");
@@ -132,19 +132,6 @@ pub(crate) fn xdg_home(variable: &str, fallback: &str) -> Option<PathBuf> {
         .map(PathBuf::from)
         .filter(|path| path.is_absolute())
         .or_else(|| std::env::home_dir().map(|home| home.join(fallback)))
-}
-
-/// Writes a file whole or not at all: a desktop reading it never sees half.
-/// Readable by all, as a package installs it, not the temporary file's 0600.
-pub(crate) fn write(path: &Path, contents: &[u8]) -> io::Result<()> {
-    use std::{io::Write, os::unix::fs::PermissionsExt};
-    let folder = path.parent().expect("the file is in a folder");
-    std::fs::create_dir_all(folder)?;
-    let mut file = tempfile::NamedTempFile::new_in(folder)?;
-    file.write_all(contents)?;
-    file.as_file()
-        .set_permissions(std::fs::Permissions::from_mode(0o644))?;
-    file.persist(path).map(drop).map_err(|error| error.error)
 }
 
 /// One argument of an entry's Exec line, quoted as the Desktop Entry
