@@ -314,12 +314,8 @@ impl Catalog {
 
     fn matches_macos(&self, path: &str, args: &[std::ffi::OsString]) -> Option<Arc<GameInfo>> {
         let path = normalize(path, true);
-        self.match_path(&path, args, false).or_else(|| {
-            // Discord names macOS app bundles, while sysinfo supplies the
-            // executable inside App.app/Contents/MacOS/. Match the outer app.
-            let end = path.find(".app/")? + 4;
-            self.match_path(&path[..end], args, false)
-        })
+        self.match_path(&path, args, false)
+            .or_else(|| self.match_path(app_bundle(&path)?, args, false))
     }
 
     fn match_path(
@@ -348,13 +344,11 @@ impl Catalog {
             .map(|rule| rule.game.clone())
     }
 
+    /// Whether a rule for this path's file name, or on macOS its app
+    /// bundle's, needs the command line.
     pub(super) fn needs_arguments(&self, path: &str) -> bool {
-        let file = path
-            .rsplit(['/', '\\'])
-            .next()
-            .unwrap_or(path)
-            .to_lowercase();
-        self.with_arguments.binary_search(&name_hash(&file)).is_ok()
+        file_names(path, false)
+            .any(|file| self.with_arguments.binary_search(&name_hash(&file)).is_ok())
     }
 
     pub(super) fn rule_count(&self) -> usize {
@@ -362,15 +356,20 @@ impl Catalog {
     }
 }
 
+/// The app bundle a lowercase path is in, up to its `.app`. Discord, and
+/// people, name a macOS app by its bundle, while sysinfo gives the
+/// executable inside App.app/Contents/MacOS/.
+pub(super) fn app_bundle(path: &str) -> Option<&str> {
+    let end = path.find(".app/")? + 4;
+    Some(&path[..end])
+}
+
 /// The lowercase file names a path may match by: on macOS, also its app
 /// bundle's.
 fn file_names(path: &str, windows: bool) -> impl Iterator<Item = String> {
     let path = normalize(path, windows || cfg!(target_os = "macos"));
     let bundle = (cfg!(target_os = "macos") && !windows)
-        .then(|| {
-            let end = path.find(".app/")? + 4;
-            path[..end].rsplit('/').next().map(str::to_lowercase)
-        })
+        .then(|| app_bundle(&path)?.rsplit('/').next().map(str::to_lowercase))
         .flatten();
     path.rsplit('/')
         .next()
@@ -689,6 +688,20 @@ mod tests {
                 .matches_macos("/Applications/OtherGame.app/Contents/MacOS/Game", &[])
                 .is_none()
         );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn macos_reads_the_command_line_for_app_bundle_rules_with_arguments() {
+        let (_file, catalog) = catalog(json!([{
+            "name":"Runtime Game", "executables":[{"os":"darwin", "name":"runtime.app", "arguments":"--game fixture"}]
+        }]));
+        let path = "/Applications/Runtime.app/Contents/MacOS/Runtime";
+        assert!(catalog.needs_arguments(path));
+        assert!(!catalog.needs_arguments("/Applications/Other.app/Contents/MacOS/Runtime"));
+        assert!(catalog.matches(path, &[], false).is_none());
+        let args = [path, "--game", "fixture"].map(std::ffi::OsString::from);
+        assert!(catalog.matches(path, &args, false).is_some());
     }
 
     #[test]
