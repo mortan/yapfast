@@ -65,6 +65,12 @@ static struct yapfast_picture planes_picture(const struct planes *planes) {
   void *user;
   /* Set on the queue by yapfast_camera_close: no frame goes out after it. */
   BOOL closed;
+  /* Seconds between frames sent on, and when the next is due, as frames'
+   * presentation times go: a format that can't film at the rate asked,
+   * such as a fixed 60 a second, films faster, and the extra frames are
+   * dropped here as camera.cc's capture module drops them. */
+  double interval;
+  double due;
   struct planes converted;
   struct planes scaled;
 }
@@ -81,6 +87,16 @@ static struct yapfast_picture planes_picture(const struct planes *planes) {
     didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
            fromConnection:(AVCaptureConnection *)connection {
   if (closed) return;
+  CMTime time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
+  if (CMTIME_IS_NUMERIC(time)) {
+    /* A quarter of a frame early still counts, so jitter doesn't drop
+     * frames of a camera filming at the rate asked; a time further back
+     * than the frames sent can be means the clock started over. */
+    double at = CMTimeGetSeconds(time), early = interval / 4;
+    if (due - at > 2 * interval) due = at;
+    if (at + early < due) return;
+    due = fmax(due, at - early) + interval;
+  }
   CVImageBufferRef image = CMSampleBufferGetImageBuffer(sampleBuffer);
   if (!image) return;
   if (CVPixelBufferLockBaseAddress(image, kCVPixelBufferLock_ReadOnly) != kCVReturnSuccess) return;
@@ -279,6 +295,8 @@ struct yapfast_camera *yapfast_camera_open(const char *id, int width, int height
     camera->sink = [YapfastCameraSink new];
     camera->sink->maxWidth = width;
     camera->sink->maxHeight = height;
+    camera->sink->interval = 1.0 / fps;
+    camera->sink->due = -INFINITY;
     camera->sink->frame = frame;
     camera->sink->user = user;
     camera->queue = dispatch_queue_create("yapfast-camera", DISPATCH_QUEUE_SERIAL);
