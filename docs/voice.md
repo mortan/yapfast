@@ -140,14 +140,18 @@ allows, such as 29.97 on some capture devices. A format that only films
 faster, such as a fixed 60, has the extra frames dropped by their timestamps
 before they're converted, as libwebrtc's module caps the rate. A device that
 refuses the format or the rate films in its own, and the refusal is logged.
-Each frame arrives on the camera's own serial dispatch queue,
-where libyuv converts it into the same reused I420 buffers and scales it down
-if it's larger, so there's no thread of Yapfast's own. Closing stops the
-session and then waits for the queue, so no picture arrives after it returns.
-Filming needs the Camera permission: the first open asks macOS, waiting for
-the answer off the main thread, and a refusal fails with where to allow it
-(System Settings › Privacy & Security › Camera). Run from a terminal, macOS
-asks on behalf of the terminal app.
+Each frame arrives on the camera's own serial dispatch queue, where libyuv
+converts it into the same reused I420 buffers and scales it down if it's
+larger, so there's no thread of Yapfast's own. Closing stops the session and
+then waits for the queue, so no picture arrives after it returns.
+Filming needs the Camera permission: the first open asks macOS, and a refusal
+fails with where to allow it (System Settings › Privacy & Security › Camera).
+A call opens its camera on a blocking thread, which waits for the answer.
+Settings' "Test video" and the camera preview open theirs on the main thread,
+which mustn't wait, so the camera opens once the person allows it, on the
+thread macOS answers on, unless the test or preview has stopped by then.
+A refusal there leaves the preview empty, and the next open says where to
+allow it. Run from a terminal, macOS asks on behalf of the terminal app.
 
 `YAPFAST_CAMERA_TEST_PATTERN=1` adds a "Test pattern" camera that films moving
 bars, for tests and machines without a camera. `cargo test -p yapfast-core

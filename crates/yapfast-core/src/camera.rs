@@ -72,6 +72,8 @@ pub fn list() -> Vec<Device> {
 #[cfg(any(target_os = "linux", target_os = "macos", windows))]
 mod native {
     use std::ffi::{CStr, CString, c_char, c_int, c_void};
+    #[cfg(target_os = "macos")]
+    use std::sync::{Arc, Mutex, Weak};
 
     use anyhow::{Context, Result, bail};
 
@@ -90,6 +92,9 @@ mod native {
 
     type RawEach = extern "C" fn(user: *mut c_void, name: *const c_char, id: *const c_char);
 
+    #[cfg(target_os = "macos")]
+    type RawAnswered = extern "C" fn(user: *mut c_void, allowed: c_int);
+
     unsafe extern "C" {
         fn yapfast_camera_list(each: RawEach, user: *mut c_void);
         fn yapfast_camera_open(
@@ -101,10 +106,11 @@ mod native {
             user: *mut c_void,
         ) -> *mut RawCamera;
         fn yapfast_camera_close(camera: *mut RawCamera);
-        /// 1 when filming is allowed, 0 when it isn't, and -1 while it's
-        /// being asked on the main thread; off it, it asks and waits.
+        /// 1 when filming is allowed and 0 when it isn't. Until the person
+        /// has answered, it asks them and waits, but on the main thread
+        /// returns -1 at once and calls `answered` with `user` later.
         #[cfg(target_os = "macos")]
-        fn yapfast_camera_access() -> c_int;
+        fn yapfast_camera_access(answered: RawAnswered, user: *mut c_void) -> c_int;
     }
 
     extern "C" fn listed(user: *mut c_void, name: *const c_char, id: *const c_char) {
@@ -154,16 +160,6 @@ mod native {
     impl Camera {
         pub(super) fn open(id: &str, sink: Sink) -> Result<Self> {
             let id = CString::new(id).context("not a camera id")?;
-            // SAFETY: no arguments; it may wait for the person's answer.
-            #[cfg(target_os = "macos")]
-            match unsafe { yapfast_camera_access() } {
-                1 => {}
-                0 => bail!(
-                    "macOS hasn't allowed Yapfast to use the camera. Allow it in System \
-                     Settings › Privacy & Security › Camera, then try again."
-                ),
-                _ => bail!("Allow Yapfast to use the camera when macOS asks, then try again."),
-            }
             let mut sink = Box::new(sink);
             let user = std::ptr::from_mut::<Sink>(sink.as_mut()).cast::<c_void>();
             // SAFETY: the id is terminated, and `user` stays boxed until the
@@ -192,13 +188,113 @@ mod native {
             unsafe { yapfast_camera_close(self.raw) };
         }
     }
+
+    /// A camera opened once macOS allows it. Opened on the main thread
+    /// before anybody has asked the person, it opens after they allow it,
+    /// on the thread macOS answers on, unless dropped first: the question
+    /// holds it only weakly.
+    #[cfg(target_os = "macos")]
+    pub(super) type Allowed = Arc<Mutex<Option<Camera>>>;
+
+    /// What opens a camera once the person answers.
+    #[cfg(target_os = "macos")]
+    struct Question {
+        camera: Weak<Mutex<Option<Camera>>>,
+        id: String,
+        sink: Sink,
+    }
+
+    #[cfg(target_os = "macos")]
+    pub(super) fn open_allowed(id: &str, sink: Sink) -> Result<Allowed> {
+        let camera = Allowed::default();
+        let question = Box::into_raw(Box::new(Question {
+            camera: Arc::downgrade(&camera),
+            id: id.to_owned(),
+            sink,
+        }));
+        // SAFETY: `answered` takes the question over when this returns -1,
+        // and only then; it may wait for the person's answer.
+        let allowed = unsafe { yapfast_camera_access(answered, question.cast()) };
+        if allowed == -1 {
+            return Ok(camera);
+        }
+        // SAFETY: not handed over, so still this call's.
+        let question = unsafe { Box::from_raw(question) };
+        if allowed != 1 {
+            bail!(
+                "macOS hasn't allowed Yapfast to use the camera. Allow it in System \
+                 Settings › Privacy & Security › Camera, then try again."
+            );
+        }
+        let opened = Camera::open(id, question.sink)?;
+        *camera.lock().unwrap() = Some(opened);
+        Ok(camera)
+    }
+
+    #[cfg(target_os = "macos")]
+    extern "C" fn answered(user: *mut c_void, allowed: c_int) {
+        // SAFETY: the question yapfast_camera_access was given, handed over
+        // for this one call.
+        let question = unsafe { Box::from_raw(user.cast::<Question>()) };
+        let Question { camera, id, sink } = *question;
+        // Dropped while macOS asked: nobody wants it any more.
+        let Some(camera) = camera.upgrade() else {
+            return;
+        };
+        if allowed != 1 {
+            tracing::info!("macOS hasn't allowed Yapfast to use the camera");
+            return;
+        }
+        match Camera::open(&id, sink) {
+            Ok(opened) => {
+                if let Ok(mut slot) = camera.lock() {
+                    *slot = Some(opened);
+                }
+            }
+            Err(error) => tracing::warn!(%error, "could not open the camera once allowed"),
+        }
+        // Dropped meanwhile, the camera closes here, with this last hold on it.
+    }
+
+    #[cfg(all(test, target_os = "macos"))]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn an_answer_opens_only_a_camera_still_wanted() {
+            let held = Arc::new(());
+            let ask = |camera: &Allowed| {
+                let held = held.clone();
+                let question = Question {
+                    camera: Arc::downgrade(camera),
+                    id: "no-such-camera".into(),
+                    sink: Box::new(move |_| {
+                        let _held = &held;
+                    }),
+                };
+                Box::into_raw(Box::new(question)).cast()
+            };
+            let camera = Allowed::default();
+            answered(ask(&camera), 0);
+            assert!(camera.lock().unwrap().is_none(), "refused");
+            answered(ask(&camera), 1);
+            assert!(camera.lock().unwrap().is_none(), "no such camera");
+            let closed = Allowed::default();
+            let question = ask(&closed);
+            drop(closed);
+            answered(question, 1);
+            assert_eq!(Arc::strong_count(&held), 1, "each sink went");
+        }
+    }
 }
 
 /// A camera filming until dropped.
 #[derive(Default)]
 pub struct Camera {
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    #[cfg(target_os = "linux")]
     _native: Option<native::Camera>,
+    #[cfg(target_os = "macos")]
+    _native: Option<native::Allowed>,
     /// The thread that films, told to stop through the flag: the test
     /// pattern's, or on Windows the one holding the native camera.
     thread: Option<(Arc<AtomicBool>, JoinHandle<()>)>,
@@ -249,12 +345,24 @@ impl Camera {
         Ok(camera)
     }
 
-    /// Linux's module films on a thread of its own, and macOS's session on
-    /// a dispatch queue of its own, so the camera needs no thread here.
-    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    /// Linux's module films on a thread of its own, so the camera needs
+    /// no thread here.
+    #[cfg(target_os = "linux")]
     fn native(id: &str, sink: Sink) -> Result<Self> {
         Ok(Self {
             _native: Some(native::Camera::open(id, sink)?),
+            thread: None,
+        })
+    }
+
+    /// macOS's session films on a dispatch queue of its own, so the camera
+    /// needs no thread here. Opened on the main thread, as Settings' test
+    /// and the preview open one, before macOS has asked the person, it
+    /// opens once they allow it.
+    #[cfg(target_os = "macos")]
+    fn native(id: &str, sink: Sink) -> Result<Self> {
+        Ok(Self {
+            _native: Some(native::open_allowed(id, sink)?),
             thread: None,
         })
     }

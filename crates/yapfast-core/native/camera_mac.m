@@ -24,6 +24,7 @@
 /* The planes stay valid until the callback returns. */
 typedef void (*yapfast_camera_frame)(void *user, const struct yapfast_picture *picture);
 typedef void (*yapfast_camera_each)(void *user, const char *name, const char *id);
+typedef void (*yapfast_camera_answered)(void *user, int allowed);
 
 /* An I420 picture of one size, allocated once. */
 struct planes {
@@ -227,11 +228,12 @@ static AVCaptureDeviceFormat *best_format(AVCaptureDevice *device, int width, in
   return best;
 }
 
-/* 1 when Yapfast may film, 0 when the person (or a policy) said no, and -1
- * when nobody has been asked yet and this is the main thread, which mustn't
- * wait for the answer: the question is asked, and the next open knows. Off
- * the main thread it asks and waits for the answer. */
-int yapfast_camera_access(void) {
+/* 1 when Yapfast may film, and 0 when the person (or a policy) said no.
+ * When nobody has asked them yet, it asks: off the main thread it waits for
+ * the answer and returns it, and on the main thread, which mustn't wait, it
+ * returns -1 and later calls `answered` with `user` and the answer, once,
+ * from another thread. It calls `answered` only then. */
+int yapfast_camera_access(yapfast_camera_answered answered, void *user) {
   @autoreleasepool {
     switch ([AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeVideo]) {
       case AVAuthorizationStatusAuthorized:
@@ -246,7 +248,7 @@ int yapfast_camera_access(void) {
     if ([NSThread isMainThread]) {
       [AVCaptureDevice requestAccessForMediaType:AVMediaTypeVideo
                                completionHandler:^(BOOL granted) {
-                                 (void)granted;
+                                 answered(user, granted ? 1 : 0);
                                }];
       return -1;
     }
