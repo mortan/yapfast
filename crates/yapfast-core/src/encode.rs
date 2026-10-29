@@ -622,6 +622,45 @@ mod tests {
         }
     }
 
+    /// macOS ends a compression session across sleep, or when its media
+    /// services restart: the encoder opens another and goes on from a
+    /// keyframe, on the GPU still.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn opens_another_session_when_macos_ends_one() {
+        unsafe extern "C" {
+            fn yapfast_hwenc_end_session(encoder: *mut Raw);
+        }
+        for codec in [Codec::H264, Codec::H265] {
+            let mut encoder = Encoder::new(codec, 320, 180, 30, 500, Effort::Light, true).unwrap();
+            let engine = encoder.engine().to_owned();
+            assert!(engine.starts_with("VideoToolbox"), "{engine}");
+            let mut rgba = vec![0u8; 320 * 180 * 4];
+            let mut decoder = Decoder::new(codec).unwrap();
+            for frame in 0..4u64 {
+                for (index, pixel) in rgba.chunks_exact_mut(4).enumerate() {
+                    pixel.copy_from_slice(&[(index as u64 + frame * 8) as u8, 90, 200, 255]);
+                }
+                if frame == 2 {
+                    // SAFETY: raw is VideoToolbox's encoder, still open.
+                    unsafe { yapfast_hwenc_end_session(encoder.raw) };
+                }
+                let encoded = encoder.encode(&rgba, frame * 3000, false).unwrap();
+                let encoded = encoded.expect("a frame");
+                assert_eq!(
+                    encoded.keyframe,
+                    frame == 0 || frame == 2,
+                    "{codec:?} {frame}"
+                );
+                let data = encoded.data.to_vec();
+                let picture = decoder.decode(&data).unwrap().expect("a picture");
+                assert_eq!((picture.width, picture.height), (320, 180));
+            }
+            assert_eq!(encoder.engine(), engine);
+            encoder.set_bitrate(250).unwrap();
+        }
+    }
+
     /// The GPU's encoder where this machine has one, x264 where it hasn't:
     /// the same stream either way. Every Mac Yapfast runs on has one.
     #[test]

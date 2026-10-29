@@ -325,7 +325,10 @@ VideoToolbox has no SMPTE 170M name for it). Each I420 frame is converted
 by libyuv into an NV12 buffer from the session's own pool and encoded
 synchronously, and the output callback writes the frame's NAL units, with
 start codes in place of their lengths and the parameter sets (with H265's VPS)
-before each keyframe, straight into the encoder's output buffer.
+before each keyframe, straight into the encoder's output buffer. When macOS
+ends the session, as across sleep, the encoder opens another with the same
+settings and goes on from a keyframe; only when that fails does the GPU's
+encoder count as failed.
 VideoToolbox's low-latency rate control (`EnableLowLatencyRateControl`) is
 off: it made keyframes larger without keeping them under the cap. An encoded
 frame takes the processor well under a millisecond, where x264 takes several.

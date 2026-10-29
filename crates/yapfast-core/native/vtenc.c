@@ -7,7 +7,8 @@
  * reordering, a frame out for each frame in, H264's or H265's Main profile,
  * a keyframe every 3 seconds and when asked, and the bitrate capped over half
  * a second. Encoding is synchronous: each frame is complete before
- * yapfast_hwenc_encode returns. */
+ * yapfast_hwenc_encode returns. When macOS ends the session, as across
+ * sleep, another with the same settings takes over from a keyframe. */
 #include <CoreFoundation/CoreFoundation.h>
 #include <CoreMedia/CoreMedia.h>
 #include <CoreVideo/CoreVideo.h>
@@ -22,10 +23,15 @@
 /* The codecs, as Rust numbers them. */
 enum { CODEC_H264, CODEC_HEVC };
 
+/* What encoding gives when macOS has ended the session. */
+enum { SESSION_ENDED = -4 };
+
 struct yapfast_hwenc {
   VTCompressionSessionRef session;
   int codec;
   int width, height;
+  /* What the session was opened with, for another. */
+  unsigned fps, kbps;
   int64_t last_pts;
   /* The options of a frame that must be a keyframe, and the colours each
    * picture is tagged with. */
@@ -154,7 +160,7 @@ static void output(void *opaque, void *frame, OSStatus status, VTEncodeInfoFlags
   (void)frame;
   struct yapfast_hwenc *h = opaque;
   if (status != noErr) {
-    h->failed = -1;
+    h->failed = status == kVTInvalidSessionErr ? SESSION_ENDED : -1;
     return;
   }
   /* A frame the encoder dropped gives no sample. */
@@ -163,12 +169,16 @@ static void output(void *opaque, void *frame, OSStatus status, VTEncodeInfoFlags
   if (ret < 0) h->failed = ret;
 }
 
+static void close_session(struct yapfast_hwenc *h) {
+  if (!h->session) return;
+  VTCompressionSessionInvalidate(h->session);
+  CFRelease(h->session);
+  h->session = NULL;
+}
+
 void yapfast_hwenc_free(struct yapfast_hwenc *h) {
   if (!h) return;
-  if (h->session) {
-    VTCompressionSessionInvalidate(h->session);
-    CFRelease(h->session);
-  }
+  close_session(h);
   if (h->force_key) CFRelease(h->force_key);
   if (h->colours) CFRelease(h->colours);
   free(h);
@@ -180,8 +190,8 @@ static CFDictionaryRef dictionary(const void **keys, const void **values, CFInde
 }
 
 /* Opens and configures the session, or says which step failed. */
-static OSStatus open_session(struct yapfast_hwenc *h, unsigned fps, unsigned kbps,
-                             const char **step) {
+static OSStatus open_session(struct yapfast_hwenc *h, const char **step) {
+  unsigned fps = h->fps, kbps = h->kbps;
   const void *spec_keys[] = {kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder};
   const void *spec_values[] = {kCFBooleanTrue};
   CFDictionaryRef specification = dictionary(spec_keys, spec_values, 1);
@@ -257,6 +267,8 @@ struct yapfast_hwenc *yapfast_hwenc_new(unsigned codec_id, unsigned width, unsig
   h->codec = (int)codec_id;
   h->width = (int)width;
   h->height = (int)height;
+  h->fps = fps ? fps : 30;
+  h->kbps = kbps;
   h->last_pts = INT64_MIN;
   const void *key_keys[] = {kVTEncodeFrameOptionKey_ForceKeyFrame};
   const void *key_values[] = {kCFBooleanTrue};
@@ -268,7 +280,7 @@ struct yapfast_hwenc *yapfast_hwenc_new(unsigned codec_id, unsigned width, unsig
                                  kCVImageBufferYCbCrMatrix_ITU_R_601_4};
   h->colours = dictionary(colour_keys, colour_values, 3);
   const char *step = "starting";
-  OSStatus status = h->force_key && h->colours ? open_session(h, fps ? fps : 30, kbps, &step) : -1;
+  OSStatus status = h->force_key && h->colours ? open_session(h, &step) : -1;
   if (status == noErr) {
     if (report_size) snprintf(report, report_size, "%s", label);
     return h;
@@ -279,17 +291,18 @@ struct yapfast_hwenc *yapfast_hwenc_new(unsigned codec_id, unsigned width, unsig
   return NULL;
 }
 
-/* Encodes one I420 frame into `out`. Returns the encoded size, 0 when the
- * encoder dropped the frame, -2 when it doesn't fit, or -1 on failure. */
-long yapfast_hwenc_encode(struct yapfast_hwenc *h, const unsigned char *y, int y_stride,
-                          const unsigned char *u, int u_stride, const unsigned char *v,
-                          int v_stride, long long pts, unsigned long duration, int keyframe,
-                          unsigned char *out, size_t capacity, int *is_key) {
-  *is_key = 0;
+/* Encodes one I420 frame into `out` with the session open now: the encoded
+ * size, 0 when the encoder dropped the frame, -2 when it doesn't fit,
+ * SESSION_ENDED, or -1 on failure. */
+static long encode_frame(struct yapfast_hwenc *h, const unsigned char *y, int y_stride,
+                         const unsigned char *u, int u_stride, const unsigned char *v,
+                         int v_stride, CMTime time, CMTime duration, int keyframe,
+                         unsigned char *out, size_t capacity) {
+  /* An ended session has no pool. */
   CVPixelBufferPoolRef pool = VTCompressionSessionGetPixelBufferPool(h->session);
+  if (!pool) return SESSION_ENDED;
   CVPixelBufferRef picture = NULL;
-  if (!pool || CVPixelBufferPoolCreatePixelBuffer(NULL, pool, &picture) != kCVReturnSuccess)
-    return -1;
+  if (CVPixelBufferPoolCreatePixelBuffer(NULL, pool, &picture) != kCVReturnSuccess) return -1;
   CVBufferSetAttachments(picture, h->colours, kCVAttachmentMode_ShouldPropagate);
   if (CVPixelBufferLockBaseAddress(picture, 0) != kCVReturnSuccess) {
     CVPixelBufferRelease(picture);
@@ -305,29 +318,64 @@ long yapfast_hwenc_encode(struct yapfast_hwenc *h, const unsigned char *y, int y
     CVPixelBufferRelease(picture);
     return -1;
   }
-  /* RTP's clock times the frames, which must go forward. */
-  if (pts <= h->last_pts) pts = h->last_pts + (long long)(duration ? duration : 1);
-  h->last_pts = pts;
-  CMTime time = CMTimeMake(pts, 90000);
   h->out = out;
   h->capacity = capacity;
   h->size = 0;
   h->is_key = 0;
   h->failed = 0;
-  OSStatus status = VTCompressionSessionEncodeFrame(
-      h->session, picture, time, CMTimeMake((int64_t)duration, 90000),
-      keyframe ? h->force_key : NULL, NULL, NULL);
+  OSStatus status = VTCompressionSessionEncodeFrame(h->session, picture, time, duration,
+                                                    keyframe ? h->force_key : NULL, NULL, NULL);
   CVPixelBufferRelease(picture);
   if (status == noErr) status = VTCompressionSessionCompleteFrames(h->session, time);
   h->out = NULL;
+  if (status == kVTInvalidSessionErr) return SESSION_ENDED;
   if (status != noErr) return -1;
   if (h->failed) return h->failed;
-  *is_key = h->is_key;
   return (long)h->size;
+}
+
+/* Encodes one I420 frame into `out`. Returns the encoded size, 0 when the
+ * encoder dropped the frame, -2 when it doesn't fit, or -1 on failure. */
+long yapfast_hwenc_encode(struct yapfast_hwenc *h, const unsigned char *y, int y_stride,
+                          const unsigned char *u, int u_stride, const unsigned char *v,
+                          int v_stride, long long pts, unsigned long duration, int keyframe,
+                          unsigned char *out, size_t capacity, int *is_key) {
+  *is_key = 0;
+  /* RTP's clock times the frames, which must go forward. */
+  if (pts <= h->last_pts) pts = h->last_pts + (long long)(duration ? duration : 1);
+  h->last_pts = pts;
+  CMTime time = CMTimeMake(pts, 90000), length = CMTimeMake((int64_t)duration, 90000);
+  long encoded = h->session ? encode_frame(h, y, y_stride, u, u_stride, v, v_stride, time,
+                                           length, keyframe, out, capacity)
+                            : SESSION_ENDED;
+  /* macOS ends sessions across sleep, or when its media services restart:
+   * another takes over, once, from a keyframe. */
+  if (encoded == SESSION_ENDED) {
+    close_session(h);
+    const char *step;
+    if (open_session(h, &step) == noErr) {
+      encoded = encode_frame(h, y, y_stride, u, u_stride, v, v_stride, time, length, 1, out,
+                             capacity);
+      if (encoded == SESSION_ENDED) encoded = -1;
+    } else {
+      /* Half a session isn't used: the next frame tries again. */
+      close_session(h);
+      encoded = -1;
+    }
+  }
+  if (encoded >= 0) *is_key = h->is_key;
+  return encoded;
+}
+
+/* Ends the session, as macOS does across sleep: for tests. */
+void yapfast_hwenc_end_session(struct yapfast_hwenc *h) {
+  if (h->session) VTCompressionSessionInvalidate(h->session);
 }
 
 /* Changes the bitrate aimed for, from the next frame on, without a
  * keyframe. 0, or -1 when VideoToolbox refused it. */
 int yapfast_hwenc_set_bitrate(struct yapfast_hwenc *h, unsigned kbps) {
-  return set_rate(h->session, kbps) == noErr ? 0 : -1;
+  if (h->session && set_rate(h->session, kbps) != noErr) return -1;
+  h->kbps = kbps;
+  return 0;
 }
