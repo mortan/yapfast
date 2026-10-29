@@ -10,6 +10,9 @@ use crate::tray::{Choice, Shown, Tray};
 thread_local! {
     /// Where the tray's choices go.
     static SHELL: RefCell<Weak<Shell>> = const { RefCell::new(Weak::new()) };
+    /// Whether [`leave_dock_once_seen`] waits for the menu bar.
+    #[cfg(target_os = "macos")]
+    static WAITING_FOR_MENU_BAR: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Yapfast's window while it's open, and what makes it again.
@@ -26,6 +29,32 @@ pub(super) struct Shell {
     gpu_failure: RefCell<Option<String>>,
     /// What the closed window showed that the application doesn't keep.
     view: RefCell<Option<View>>,
+}
+
+/// Leaves the Dock once the menu bar shows the icon, while no window is
+/// open, looking again each second: closed in full screen, or with a menu
+/// bar that hides itself, the window goes while the menu bar is out of
+/// sight, and Yapfast would otherwise keep its Dock icon until the next
+/// close.
+#[cfg(target_os = "macos")]
+fn leave_dock_once_seen() {
+    if WAITING_FOR_MENU_BAR.replace(true) {
+        return;
+    }
+    fn look() {
+        let shell = SHELL.with(|shell| shell.borrow().upgrade());
+        let Some(shell) = shell.filter(|shell| shell.window.borrow().is_none()) else {
+            WAITING_FOR_MENU_BAR.set(false);
+            return;
+        };
+        if shell.adapter.borrow().tray.as_ref().is_some_and(Tray::seen) {
+            WAITING_FOR_MENU_BAR.set(false);
+            crate::tray::show_in_dock(false);
+        } else {
+            slint::Timer::single_shot(Duration::from_secs(1), look);
+        }
+    }
+    slint::Timer::single_shot(Duration::from_secs(1), look);
 }
 
 /// Where a closed window's timeline was scrolled to; the layout keeps where
@@ -83,12 +112,12 @@ impl Shell {
     /// Goes to the tray, as starting at sign-in does: the first window, never
     /// shown, goes, and the next opens where a first one would.
     pub(super) fn start_in_tray(self: &Rc<Self>) {
-        // Windows and macOS know at once whether the icon went in. On Linux
-        // the bus says a moment later, and without a tray `chosen` opens the
-        // window.
+        // Windows knows at once whether the icon went in, and macOS's menu
+        // bar always takes it. On Linux the bus says a moment later, and
+        // without a tray `chosen` opens the window.
         let missing = match self.adapter.borrow().tray.as_ref() {
             None => true,
-            Some(tray) => cfg!(any(windows, target_os = "macos")) && !tray.available(),
+            Some(tray) => cfg!(windows) && !tray.available(),
         };
         if missing {
             // Once winit has made Yapfast the accessory app `hidden_start`
@@ -200,7 +229,8 @@ impl Shell {
         if self.adapter.borrow().tray.as_ref().is_some_and(Tray::seen) {
             crate::tray::show_in_dock(false);
         } else {
-            tracing::info!("the menu bar doesn't show the icon; staying in the Dock");
+            tracing::info!("the menu bar doesn't show the icon; staying in the Dock for now");
+            leave_dock_once_seen();
         }
         // Slint lets go of the window's last pieces as the event loop goes on.
         slint::Timer::single_shot(Duration::from_millis(500), release_memory);

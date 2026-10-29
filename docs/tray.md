@@ -192,7 +192,9 @@ status item isn't visible (`isVisible`) or its button's window isn't on
 screen (no `Visible` in its `occlusionState`): the signs AppKit gives of an
 icon hidden by the person or a menu bar manager, or left without room
 beside the notch. A menu bar that hides itself takes the icon's window off
-screen too, so closing the window while it's hidden keeps the Dock icon.
+screen too, as does full screen while its space switches, so closing the
+window then keeps the Dock icon only until the menu bar shows the icon
+again, which Yapfast looks for each second while the window stays closed.
 Opening the window, from the menu, a notification or a later start, makes
 it regular again and brings it forward.
 
