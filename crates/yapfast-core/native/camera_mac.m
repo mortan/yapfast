@@ -92,33 +92,16 @@ static struct yapfast_picture planes_picture(const struct planes *planes) {
     if (converted.data) {
       uint8_t *y = plane_y(&converted), *u = plane_u(&converted), *v = plane_v(&converted);
       int stride = chroma_stride(&converted);
-      switch (CVPixelBufferGetPixelFormatType(image)) {
-        case kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange:
-        case kCVPixelFormatType_420YpCbCr8BiPlanarFullRange:
-          failed = NV12ToI420(CVPixelBufferGetBaseAddressOfPlane(image, 0),
-                              (int)CVPixelBufferGetBytesPerRowOfPlane(image, 0),
-                              CVPixelBufferGetBaseAddressOfPlane(image, 1),
-                              (int)CVPixelBufferGetBytesPerRowOfPlane(image, 1), y, width, u,
-                              stride, v, stride, width, height);
-          break;
-        case kCVPixelFormatType_422YpCbCr8:
-          failed = UYVYToI420(CVPixelBufferGetBaseAddress(image),
-                              (int)CVPixelBufferGetBytesPerRow(image), y, width, u, stride, v,
-                              stride, width, height);
-          break;
-        case kCVPixelFormatType_422YpCbCr8_yuvs:
-          failed = YUY2ToI420(CVPixelBufferGetBaseAddress(image),
-                              (int)CVPixelBufferGetBytesPerRow(image), y, width, u, stride, v,
-                              stride, width, height);
-          break;
-        case kCVPixelFormatType_32BGRA:
-          /* libyuv's ARGB is BGRA in memory. */
-          failed = ARGBToI420(CVPixelBufferGetBaseAddress(image),
-                              (int)CVPixelBufferGetBytesPerRow(image), y, width, u, stride, v,
-                              stride, width, height);
-          break;
-        default:
-          break;
+      /* videoSettings asks for NV12, which AVFoundation converts every
+       * frame into. */
+      OSType format = CVPixelBufferGetPixelFormatType(image);
+      if (format == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange ||
+          format == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) {
+        failed = NV12ToI420(CVPixelBufferGetBaseAddressOfPlane(image, 0),
+                            (int)CVPixelBufferGetBytesPerRowOfPlane(image, 0),
+                            CVPixelBufferGetBaseAddressOfPlane(image, 1),
+                            (int)CVPixelBufferGetBytesPerRowOfPlane(image, 1), y, width, u, stride,
+                            v, stride, width, height);
       }
     }
   }
