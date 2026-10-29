@@ -1,13 +1,14 @@
 //! Zooming the whole window, as browsers do: Ctrl with + or -, or with the
 //! scroll wheel, steps through [`LEVELS`], and Ctrl+0 returns to 100%. On
-//! macOS the key is Cmd, as there in browsers; see [`COMMAND`].
+//! macOS the key is Cmd, as there in browsers; see [`COMMAND`]. A pinch on a
+//! trackpad, which winit reports on macOS, steps too.
 //!
 //! Slint draws everything in logical pixels, so the zoom multiplies the
 //! display's own scale factor: text, spacing and pictures all grow together,
 //! and the layout gets fewer logical pixels to fill.
 
 use slint::winit_030::winit::{
-    event::{ElementState, MouseScrollDelta, WindowEvent},
+    event::{ElementState, MouseScrollDelta, TouchPhase, WindowEvent},
     keyboard::{Key, KeyCode, ModifiersState, PhysicalKey},
 };
 
@@ -27,6 +28,10 @@ const MIN_HEIGHT: f32 = 560.;
 /// Touchpads scroll in pixels, many events to a swipe; this much scrolling
 /// makes one step.
 const PIXELS_PER_STEP: f64 = 60.;
+
+/// A pinch comes as many small changes of magnification; this much makes one
+/// step, about as much as a step zooms, so the window follows the fingers.
+const PINCH_PER_STEP: f64 = 0.06;
 
 /// The zoom key: Ctrl, or Cmd on macOS. These events come from winit before
 /// Slint's, so Slint's swap of the two on macOS, which makes
@@ -52,6 +57,8 @@ pub struct Keys {
     alt: bool,
     /// Scrolling not yet worth a step, in pixels; positive scrolls up.
     scrolled: f64,
+    /// Pinching not yet worth a step; positive spreads the fingers.
+    pinched: f64,
     /// The keys whose press zoomed, so their release is kept from Slint too.
     pressed: Vec<PhysicalKey>,
 }
@@ -123,6 +130,27 @@ impl Keys {
                 } else {
                     Outcome::Taken
                 }
+            }
+            WindowEvent::PinchGesture { delta, phase, .. } => {
+                if *phase == TouchPhase::Started {
+                    self.pinched = 0.;
+                }
+                if delta.is_finite() {
+                    self.pinched += delta;
+                }
+                let step = if self.pinched >= PINCH_PER_STEP {
+                    self.pinched -= PINCH_PER_STEP;
+                    Outcome::Step(Step::In)
+                } else if self.pinched <= -PINCH_PER_STEP {
+                    self.pinched += PINCH_PER_STEP;
+                    Outcome::Step(Step::Out)
+                } else {
+                    Outcome::Taken
+                };
+                if matches!(phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                    self.pinched = 0.;
+                }
+                step
             }
             WindowEvent::Focused(false) => {
                 // Ctrl or Cmd may be let go elsewhere.
@@ -253,10 +281,7 @@ mod tests {
 
     #[test]
     fn touchpads_step_once_per_swipe_worth() {
-        use slint::winit_030::winit::{
-            dpi::PhysicalPosition,
-            event::{DeviceId, TouchPhase},
-        };
+        use slint::winit_030::winit::{dpi::PhysicalPosition, event::DeviceId};
         let mut keys = Keys::default();
         let wheel = |delta| WindowEvent::MouseWheel {
             device_id: DeviceId::dummy(),
@@ -276,5 +301,37 @@ mod tests {
             keys.event(&wheel(MouseScrollDelta::LineDelta(0., -1.))),
             Outcome::Step(Step::Out)
         ));
+    }
+
+    #[test]
+    fn a_pinch_steps_as_far_as_the_fingers_spread() {
+        use slint::winit_030::winit::event::DeviceId;
+        let mut keys = Keys::default();
+        let mut pinch = |delta, phase| {
+            keys.event(&WindowEvent::PinchGesture {
+                device_id: DeviceId::dummy(),
+                delta,
+                phase,
+            })
+        };
+        assert!(matches!(pinch(0., TouchPhase::Started), Outcome::Taken));
+        assert!(matches!(pinch(0.04, TouchPhase::Moved), Outcome::Taken));
+        assert!(matches!(
+            pinch(0.04, TouchPhase::Moved),
+            Outcome::Step(Step::In)
+        ));
+        // What's past a step counts toward the next.
+        assert!(matches!(
+            pinch(0.05, TouchPhase::Moved),
+            Outcome::Step(Step::In)
+        ));
+        assert!(matches!(pinch(f64::NAN, TouchPhase::Moved), Outcome::Taken));
+        assert!(matches!(
+            pinch(-0.1, TouchPhase::Moved),
+            Outcome::Step(Step::Out)
+        ));
+        assert!(matches!(pinch(0.05, TouchPhase::Ended), Outcome::Taken));
+        // A new pinch starts from nothing.
+        assert!(matches!(pinch(0.05, TouchPhase::Moved), Outcome::Taken));
     }
 }
