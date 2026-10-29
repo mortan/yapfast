@@ -83,8 +83,8 @@ switch stays on there.
 `--background` restores the saved session and goes to the tray without
 showing the window, or shows it when there's no session to restore, since
 signing in needs it. Windows knows at once whether the icon went into the
-notification area, and macOS whether the menu bar took it; without it the
-window shows. On Linux the bus says a
+notification area; without it the window shows. macOS's menu bar always
+takes the icon. On Linux the bus says a
 moment later, and a tray that's missing, or goes while the window is closed,
 opens the window. A window made late, from the tray, fails over to Skia
 Software as the first does when the GPU fails.
@@ -182,12 +182,22 @@ target object.
 
 While the window shows, Yapfast is a regular app, with a Dock icon and its
 menu bar. Closed to the menu bar, it's an accessory app with neither, so the
-Dock offers no app with nothing to show; opening the window, from the menu,
-a notification or a later start, makes it regular again and brings it
-forward. Started in the menu bar, as at sign-in, it's an accessory app
-before launching finishes, and winit, which would make it the active app,
+Dock offers no app with nothing to show. That needs an icon the person can
+see, so Yapfast keeps its Dock icon instead when, as the window closes, the
+status item isn't visible (`isVisible`) or its button's window isn't on
+screen (no `Visible` in its `occlusionState`): the signs AppKit gives of an
+icon hidden by the person or a menu bar manager, or left without room
+beside the notch. A menu bar that hides itself takes the icon's window off
+screen too, so closing the window while it's hidden keeps the Dock icon.
+Opening the window, from the menu, a notification or a later start, makes
+it regular again and brings it forward.
+
+Started in the menu bar, as at sign-in, Yapfast is an accessory app before
+launching finishes, and winit, which would make it the active app,
 activates it only if no other app is: the person keeps the focus, and the
-Dock doesn't show Yapfast for a moment.
+Dock doesn't show Yapfast for a moment. It doesn't check that the icon can
+be seen, which AppKit tells only half a second after the icon appears; if
+it can't, opening `Yapfast.app` again opens the window, as below.
 
 winit's application delegate leaves quitting and reopening to AppKit, so
 Yapfast adds two methods to its class as the icon starts.

@@ -194,8 +194,14 @@ impl Shell {
             return;
         }
         self.drop_window();
+        // Out of the Dock, unless the person can't see the menu bar icon,
+        // which would leave only opening Yapfast.app again to bring it back.
         #[cfg(target_os = "macos")]
-        crate::tray::show_in_dock(false);
+        if self.adapter.borrow().tray.as_ref().is_some_and(Tray::seen) {
+            crate::tray::show_in_dock(false);
+        } else {
+            tracing::info!("the menu bar doesn't show the icon; staying in the Dock");
+        }
         // Slint lets go of the window's last pieces as the event loop goes on.
         slint::Timer::single_shot(Duration::from_millis(500), release_memory);
     }

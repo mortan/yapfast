@@ -52,6 +52,12 @@ impl Tray {
         self.platform.available()
     }
 
+    /// Whether the person can see the icon now, so Yapfast can leave the Dock.
+    #[cfg(target_os = "macos")]
+    pub fn seen(&self) -> bool {
+        self.platform.seen()
+    }
+
     /// Shows the unread dot and the call's Disconnect, telling the tray only
     /// when they change.
     pub fn show(&self, shown: Shown) {
@@ -547,7 +553,7 @@ mod macos {
     use objc2_app_kit::{
         NSApplication, NSApplicationActivationPolicy, NSApplicationTerminateReply,
         NSBitmapImageRep, NSDeviceRGBColorSpace, NSImage, NSMenu, NSMenuItem,
-        NSSquareStatusItemLength, NSStatusBar, NSStatusItem,
+        NSSquareStatusItemLength, NSStatusBar, NSStatusItem, NSWindowOcclusionState,
     };
     use objc2_foundation::{
         NSActivityOptions, NSAppleEventDescriptor, NSAppleEventManager, NSProcessInfo, NSSize,
@@ -680,8 +686,26 @@ mod macos {
             })
         }
 
+        /// The menu bar always takes the icon.
         pub fn available(&self) -> bool {
             true
+        }
+
+        /// Whether the menu bar shows the icon now, as far as AppKit tells:
+        /// an icon hidden by the person or a menu bar manager, or without room
+        /// beside the notch, isn't visible or has no window on screen; nor has
+        /// one in a menu bar that hides itself, while it's hidden.
+        pub fn seen(&self) -> bool {
+            self.item.isVisible()
+                && self
+                    .item
+                    .button(self.mtm)
+                    .and_then(|button| button.window())
+                    .is_some_and(|window| {
+                        window
+                            .occlusionState()
+                            .contains(NSWindowOcclusionState::Visible)
+                    })
         }
 
         pub fn show(&self, shown: Shown) {

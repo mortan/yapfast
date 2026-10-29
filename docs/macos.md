@@ -64,7 +64,8 @@ Yapfast does on macOS what it does on Linux, apart from what's
 - **Push to talk** hears the key in every app through a listen-only
   `CGEventTap` ([push to talk](discord/voice.md#push-to-talk)).
 - **The menu bar.** Closing the window leaves Yapfast's icon in the menu bar,
-  with Open Yapfast, Disconnect and Quit; Cmd+Q and the Dock's Quit go
+  with Open Yapfast, Disconnect and Quit, or keeps the Dock icon where the
+  menu bar doesn't show it; Cmd+Q and the Dock's Quit go
   through Yapfast's own Quit, and a call holds off App Nap
   ([the tray](tray.md#macos)).
 - **Start at sign-in** writes a launchd agent,
