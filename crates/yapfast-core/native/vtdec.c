@@ -3,8 +3,10 @@
  * decodes with VideoToolbox too. Access units come as Annex B (Go Live) or
  * length-prefixed with an avcC record (files); either way they're rewritten
  * with 4-byte lengths and their parameter sets taken out. Those are kept by
- * kind and id, and one that's new or changed opens another session with all
- * of them. Decoding is synchronous, and pictures leave as
+ * kind and id: one that changed opens another session with all of them, and
+ * one with a new id goes to the open session, when it takes it, so that the
+ * session keeps its reference pictures. Decoding is synchronous, and pictures
+ * leave as
  * I420 converted from VideoToolbox's NV12 into one reused buffer. */
 #include "vtdec.h"
 
@@ -25,7 +27,8 @@ enum { HELD = 17 };
  * and reordering; past them, it reads as zeros, as if it said nothing more. */
 enum { SET_BYTES = 256 };
 
-/* The most parameter sets kept: more ids than an encoder uses. */
+/* The most parameter sets kept; past them, the one seen longest ago makes
+ * way, as for an encoder that numbers each resolution's sets anew. */
 enum { SETS = 32 };
 
 struct parameter_set {
@@ -36,6 +39,8 @@ struct parameter_set {
   uint8_t *data;
   size_t size;
   size_t capacity;
+  /* When it last came, on the decoder's clock. */
+  uint64_t seen;
 };
 
 struct held_picture {
@@ -51,10 +56,14 @@ struct vtdec {
   /* The last parameter set of each kind and id. */
   struct parameter_set sets[SETS];
   int set_count;
+  uint64_t clock;
+  /* A kept set's bytes changed, or a set with a new id came. */
   int changed;
+  int added;
   CMVideoFormatDescriptionRef format;
   VTDecompressionSessionRef session;
-  /* Pictures the stream may reorder, and its colours, from its SPS. */
+  /* Pictures the stream may reorder, from its SPSs, and its colours, from
+   * the SPS it names now. */
   int delay;
   int bt709;
   int full_range;
@@ -201,10 +210,21 @@ static int max_dpb_frames(int level, unsigned macroblocks) {
   return frames > 16 ? 16 : (int)frames;
 }
 
+/* What VideoToolbox doesn't tell from an H264 SPS. */
+struct sps {
+  /* Its pictures' size, in pixels. */
+  unsigned width;
+  unsigned height;
+  int delay;
+  int bt709;
+  int full_range;
+};
+
 /* Reads what VideoToolbox doesn't tell from an H264 SPS: whether its
- * pictures can be decoded, how many it reorders, and its colours. 0, or -2
- * for 4:2:2, 4:4:4 or more than 8 bits, which VideoToolbox doesn't decode. */
-static int read_sps(struct vtdec *decoder, const uint8_t *nal, size_t size) {
+ * pictures can be decoded, their size, how many it reorders, and its
+ * colours. 0, or -2 for 4:2:2, 4:4:4 or more than 8 bits, which VideoToolbox
+ * doesn't decode. */
+static int read_sps(const uint8_t *nal, size_t size, struct sps *sps) {
   struct bits bits;
   read_payload(&bits, nal, size, 1);
   int profile = (int)read_bits(&bits, 8);
@@ -253,21 +273,23 @@ static int read_sps(struct vtdec *decoder, const uint8_t *nal, size_t size) {
   if (read_bit(&bits)) {
     for (int side = 0; side < 4; side++) read_ue(&bits);
   }
+  sps->width = width * 16;
+  sps->height = height * 16;
   /* Baseline has no B frames; otherwise, without its own count, a stream
    * may reorder as many pictures as its level holds. */
-  decoder->delay = profile == 66 ? 0 : max_dpb_frames(level, width * height);
-  decoder->bt709 = -1;
-  decoder->full_range = 0;
+  sps->delay = profile == 66 ? 0 : max_dpb_frames(level, width * height);
+  sps->bt709 = -1;
+  sps->full_range = 0;
   if (!read_bit(&bits)) return 0;
   if (read_bit(&bits) && read_bits(&bits, 8) == 255) read_bits(&bits, 32);
   if (read_bit(&bits)) read_bit(&bits);
   if (read_bit(&bits)) {
     read_bits(&bits, 3);
-    decoder->full_range = (int)read_bit(&bits);
+    sps->full_range = (int)read_bit(&bits);
     if (read_bit(&bits)) {
       read_bits(&bits, 16);
       unsigned matrix = read_bits(&bits, 8);
-      decoder->bt709 = matrix == 1 ? 1 : matrix == 5 || matrix == 6 ? 0 : -1;
+      sps->bt709 = matrix == 1 ? 1 : matrix == 5 || matrix == 6 ? 0 : -1;
     }
   }
   if (read_bit(&bits)) {
@@ -290,7 +312,7 @@ static int read_sps(struct vtdec *decoder, const uint8_t *nal, size_t size) {
     for (int field = 0; field < 4; field++) read_ue(&bits);
     unsigned reorder = read_ue(&bits);
     /* A damaged SPS keeps the level's count. */
-    if (bits.at <= bits.size * 8 && reorder <= 16) decoder->delay = (int)reorder;
+    if (bits.at <= bits.size * 8 && reorder <= 16) sps->delay = (int)reorder;
   }
   return 0;
 }
@@ -349,9 +371,20 @@ static const struct parameter_set *first_set(const struct vtdec *decoder, int ki
   return NULL;
 }
 
+/* The SPS that came last, which the stream's pictures name now, or NULL. */
+static const struct parameter_set *current_sps(const struct vtdec *decoder) {
+  int kind = decoder->codec == VTDEC_HEVC ? 1 : 0;
+  const struct parameter_set *current = NULL;
+  for (int index = 0; index < decoder->set_count; index++) {
+    const struct parameter_set *set = &decoder->sets[index];
+    if (set->kind == kind && set->size && (!current || set->seen > current->seen)) current = set;
+  }
+  return current;
+}
+
 /* Keeps a parameter set in place of the last of its kind and id, noting
- * whether that changes what's kept. 0, -1 for a damaged one or one too
- * many, or -3 out of memory. */
+ * whether that changes what's kept; with every slot taken, it replaces the
+ * set seen longest ago. 0, -1 for a damaged one, or -3 out of memory. */
 static int keep_set(struct vtdec *decoder, int kind, const uint8_t *nal, size_t size) {
   int id = set_id(decoder, kind, nal, size);
   if (id < 0) return -1;
@@ -360,12 +393,25 @@ static int keep_set(struct vtdec *decoder, int kind, const uint8_t *nal, size_t 
     struct parameter_set *kept = &decoder->sets[index];
     if (kept->kind == kind && kept->id == (unsigned)id) set = kept;
   }
+  int *noted = &decoder->changed;
   if (!set) {
-    if (decoder->set_count == SETS) return -1;
-    set = &decoder->sets[decoder->set_count++];
+    if (decoder->set_count < SETS) {
+      set = &decoder->sets[decoder->set_count++];
+    } else {
+      /* Never the last of its kind, as an avcC record's only SPS. */
+      int of_kind[3] = {0};
+      for (int index = 0; index < SETS; index++) of_kind[decoder->sets[index].kind]++;
+      for (int index = 0; index < SETS; index++) {
+        struct parameter_set *kept = &decoder->sets[index];
+        if (of_kind[kept->kind] > 1 && (!set || kept->seen < set->seen)) set = kept;
+      }
+    }
     set->kind = kind;
     set->id = (unsigned)id;
+    set->size = 0;
+    noted = &decoder->added;
   }
+  set->seen = ++decoder->clock;
   if (set->size == size && memcmp(set->data, nal, size) == 0) return 0;
   if (set->capacity < size) {
     uint8_t *grown = realloc(set->data, size);
@@ -375,7 +421,37 @@ static int keep_set(struct vtdec *decoder, int kind, const uint8_t *nal, size_t 
   }
   memcpy(set->data, nal, size);
   set->size = size;
-  decoder->changed = 1;
+  *noted = 1;
+  return 0;
+}
+
+/* Reads what VideoToolbox doesn't tell from the kept SPSs: whether the
+ * current one's pictures can be decoded, and its colours, and the most
+ * pictures any of them reorders. An SPS the stream no longer names may be one
+ * VideoToolbox can't decode. 0, or -2 for a current SPS VideoToolbox can't
+ * decode or any bigger than `max_side`. */
+static int read_sets(struct vtdec *decoder, int max_side) {
+  decoder->delay = 0;
+  decoder->bt709 = -1;
+  decoder->full_range = 0;
+  if (decoder->codec != VTDEC_H264) return 0;
+  const struct parameter_set *current = current_sps(decoder);
+  for (int index = 0; index < decoder->set_count; index++) {
+    const struct parameter_set *set = &decoder->sets[index];
+    if (set->kind != 0 || !set->size) continue;
+    struct sps sps;
+    int read = read_sps(set->data, set->size, &sps);
+    if (read < 0) {
+      if (set == current) return read;
+      continue;
+    }
+    if (sps.width > (unsigned)max_side || sps.height > (unsigned)max_side) return -2;
+    if (sps.delay > decoder->delay) decoder->delay = sps.delay;
+    if (set == current) {
+      decoder->bt709 = sps.bt709;
+      decoder->full_range = sps.full_range;
+    }
+  }
   return 0;
 }
 
@@ -401,42 +477,55 @@ static void output(void *opaque, void *frame, OSStatus status, VTDecodeInfoFlags
   if (status == noErr && image && !decoder->decoded) decoder->decoded = CVPixelBufferRetain(image);
 }
 
-/* A session for the parameter sets kept, every one of them. */
+/* A session for the parameter sets kept, every one of them. The session
+ * open stays when only sets with new ids came and it takes them, as an
+ * encoder's new PPS in the middle of a group of pictures, so that it keeps
+ * the pictures the next ones refer to. */
 static int open_session(struct vtdec *decoder, int max_side) {
-  drop_session(decoder);
   const uint8_t *sets[SETS];
   size_t sizes[SETS];
   size_t count = 0;
-  /* By kind: H265's VPSs, then the SPSs, then the PPSs. */
+  /* By kind: H265's VPSs, then the SPSs, the current one first, as the
+   * format's size is its, then the PPSs. */
+  const struct parameter_set *current = current_sps(decoder);
   for (int kind = 0; kind < kinds(decoder); kind++) {
+    if (current && current->kind == kind) {
+      sets[count] = current->data;
+      sizes[count++] = current->size;
+    }
     for (int index = 0; index < decoder->set_count; index++) {
       const struct parameter_set *set = &decoder->sets[index];
-      if (set->kind != kind || !set->size) continue;
+      if (set->kind != kind || !set->size || set == current) continue;
       sets[count] = set->data;
       sizes[count++] = set->size;
     }
   }
+  CMVideoFormatDescriptionRef format = NULL;
   OSStatus status =
       decoder->codec == VTDEC_HEVC
           ? CMVideoFormatDescriptionCreateFromHEVCParameterSets(NULL, count, sets, sizes, 4, NULL,
-                                                                &decoder->format)
+                                                                &format)
           : CMVideoFormatDescriptionCreateFromH264ParameterSets(NULL, count, sets, sizes, 4,
-                                                                &decoder->format);
+                                                                &format);
   if (status != noErr) return -1;
-  CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(decoder->format);
-  if (size.width <= 0 || size.height <= 0 || size.width > max_side || size.height > max_side) {
-    return -2;
+  CMVideoDimensions size = CMVideoFormatDescriptionGetDimensions(format);
+  int range = decoder->full_range;
+  int read = size.width <= 0 || size.height <= 0 || size.width > max_side || size.height > max_side
+                 ? -2
+                 : read_sets(decoder, max_side);
+  if (read < 0) {
+    CFRelease(format);
+    return read;
   }
-  if (decoder->codec == VTDEC_H264) {
-    /* The first SPS tells the reordering and colours. */
-    const struct parameter_set *sps = first_set(decoder, 0);
-    int read = read_sps(decoder, sps->data, sps->size);
-    if (read < 0) return read;
-  } else {
-    decoder->delay = 0;
-    decoder->bt709 = -1;
-    decoder->full_range = 0;
+  if (decoder->session && !decoder->changed && decoder->full_range == range &&
+      VTDecompressionSessionCanAcceptFormatDescription(decoder->session, format)) {
+    CFRelease(decoder->format);
+    decoder->format = format;
+    decoder->added = 0;
+    return 0;
   }
+  drop_session(decoder);
+  decoder->format = format;
   /* In the stream's own range, so VideoToolbox doesn't convert it. */
   int32_t pixels = decoder->full_range ? kCVPixelFormatType_420YpCbCr8BiPlanarFullRange
                                        : kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
@@ -458,6 +547,7 @@ static int open_session(struct vtdec *decoder, int max_side) {
     return status == kVTCouldNotFindVideoDecoderErr ? -2 : -1;
   }
   decoder->changed = 0;
+  decoder->added = 0;
   return 0;
 }
 
@@ -510,8 +600,8 @@ int vtdec_configure(struct vtdec *decoder, const uint8_t *record, size_t size) {
     }
   }
   decoder->length_size = length_size;
-  const struct parameter_set *sps = first_set(decoder, 0);
-  return sps ? read_sps(decoder, sps->data, sps->size) : 0;
+  /* The size is checked as each access unit is decoded. */
+  return read_sets(decoder, INT_MAX);
 }
 
 /* Appends a NAL unit with a 4-byte length to the sample. */
@@ -549,7 +639,7 @@ int vtdec_decode(struct vtdec *decoder, const uint8_t *data, size_t size, int64_
     if (result < 0) return result;
   }
   if (got < 0) return -1;
-  if (decoder->changed || !decoder->session) {
+  if (decoder->changed || decoder->added || !decoder->session) {
     for (int kind = 0; kind < kinds(decoder); kind++) {
       /* Pictures before their parameter sets can't be decoded. */
       if (!first_set(decoder, kind)) return sample_size ? -1 : 0;

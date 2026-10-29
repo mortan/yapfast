@@ -357,10 +357,12 @@ mod tests {
             escape(nal[0], &named)
         }
 
-        /// Two PPSs, ids 0 and 15, before every picture, each first in
-        /// turn, and slices that name 15: each picture decodes as it does
-        /// with the one PPS, so neither PPS displaces the other, nor
-        /// makes the decoder start over without its reference pictures.
+        /// A PPS with a new id, 15, that first comes with a P frame, and
+        /// from then on both PPSs, 0 and 15, before every picture, each
+        /// first in turn, and slices that name 15: each picture decodes as
+        /// it does with the one PPS, so neither PPS displaces the other,
+        /// nor makes the decoder start over without its reference
+        /// pictures.
         #[test]
         fn keeps_parameter_sets_by_their_ids() {
             let file = fixture("stream-h264.h264");
@@ -380,18 +382,28 @@ mod tests {
             let pps = units.iter().flatten().find(|nal| nal[0] & 0x1f == 8);
             let pps = pps.unwrap().to_vec();
             let both = [with_pps_id(&pps, 15), pps];
+            // The pictures before it name PPS 0, as the stream does.
+            const NEW: usize = 5;
+            assert!(units[NEW].iter().all(|nal| nal[0] & 0x1f != 5), "a P frame");
             let named: Vec<Vec<u8>> = units
                 .iter()
                 .enumerate()
                 .map(|(index, unit)| {
+                    if index < NEW {
+                        return annex_b(unit);
+                    }
                     let mut nals = vec![];
                     for nal in unit {
                         match nal[0] & 0x1f {
                             8 => {}
                             1 | 5 => {
                                 if !nals.iter().any(|nal: &Vec<u8>| nal[0] & 0x1f == 8) {
-                                    nals.push(both[index % 2].clone());
-                                    nals.push(both[1 - index % 2].clone());
+                                    if index == NEW {
+                                        nals.push(both[0].clone());
+                                    } else {
+                                        nals.push(both[index % 2].clone());
+                                        nals.push(both[1 - index % 2].clone());
+                                    }
                                 }
                                 nals.push(with_pps_id(nal, 15));
                             }
