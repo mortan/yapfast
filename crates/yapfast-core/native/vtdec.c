@@ -547,14 +547,17 @@ int vtdec_picture(struct vtdec *decoder, int drain, struct vtdec_picture *pictur
       result = -1;
     }
     *picture = (struct vtdec_picture){
-        .width = width,
-        .height = height,
-        .y = y,
-        .u = u,
-        .v = v,
-        .y_stride = width,
-        .u_stride = chroma_width,
-        .v_stride = chroma_width,
+        .planes =
+            {
+                .width = width,
+                .height = height,
+                .y = y,
+                .u = u,
+                .v = v,
+                .y_stride = width,
+                .u_stride = chroma_width,
+                .v_stride = chroma_width,
+            },
         .pts = held.pts,
         .bt709 = decoder->bt709,
         .full_range = pixels == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
@@ -566,20 +569,6 @@ int vtdec_picture(struct vtdec *decoder, int drain, struct vtdec_picture *pictur
 }
 
 /* hevc.c's interface, for watched H265 streams. */
-
-/* The widest or tallest picture a stream may send, as in decode.c. */
-enum { MAX_SIDE = 8192 };
-
-struct yapfast_picture {
-  int width;
-  int height;
-  const unsigned char *y;
-  const unsigned char *u;
-  const unsigned char *v;
-  int y_stride;
-  int u_stride;
-  int v_stride;
-};
 
 struct vtdec *yapfast_hevc_new(unsigned threads) {
   /* VideoToolbox picks its own threads, or the GPU's decoder. */
@@ -600,7 +589,6 @@ int yapfast_hevc_decode(struct vtdec *decoder, const unsigned char *data, size_t
   struct vtdec_picture got;
   int result = vtdec_picture(decoder, 0, &got);
   if (result <= 0) return result;
-  *picture = (struct yapfast_picture){got.width,    got.height,   got.y,       got.u, got.v,
-                                      got.y_stride, got.u_stride, got.v_stride};
+  *picture = got.planes;
   return 1;
 }

@@ -18,6 +18,7 @@
 #include "libavutil/pixdesc.h"
 #include "libyuv/convert_argb.h"
 #include "libyuv/scale.h"
+#include "picture.h"
 #include "vpx/vp8dx.h"
 #include "vpx/vpx_decoder.h"
 #ifdef __APPLE__
@@ -26,10 +27,6 @@
 #endif
 
 enum { DECODER_AVCODEC, DECODER_VPX, DECODER_DAV1D, DECODER_VT };
-
-/* The widest or tallest picture Yapfast decodes. A file can claim any size,
- * and each picture would take that much memory. */
-enum { MAX_SIDE = 8192 };
 
 /* What yapfast_video_next returns. */
 enum { END = 0, PICTURE = 1, SOUND = 2, HELD = 3, FAILED = -1, UNSUPPORTED = -2 };
@@ -460,14 +457,15 @@ static int receive_picture(struct yapfast_video *video, int64_t *time_ms) {
       struct vtdec_picture picture;
       int got = vtdec_picture(video->vt, video->sent_all, &picture);
       if (got <= 0) return got < 0 ? FAILED : 0;
+      const struct yapfast_picture *i420 = &picture.planes;
       *planes = (struct planes){
-          .width = picture.width,
-          .height = picture.height,
+          .width = i420->width,
+          .height = i420->height,
           .depth = 8,
           .layout = LAYOUT_420,
-          .data = {picture.y, picture.u, picture.v},
-          .stride = {picture.y_stride, picture.u_stride, picture.v_stride},
-          .bt709 = bt709(picture.bt709, picture.height),
+          .data = {i420->y, i420->u, i420->v},
+          .stride = {i420->y_stride, i420->u_stride, i420->v_stride},
+          .bt709 = bt709(picture.bt709, i420->height),
           .full_range = picture.full_range,
       };
       *time_ms = milliseconds(video, video->stream, picture.pts);

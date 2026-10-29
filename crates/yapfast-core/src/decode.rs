@@ -9,21 +9,11 @@ use anyhow::{Result, bail};
 use livekit::webrtc::native::yuv_helper;
 use yapfast_discord::rtp::Codec;
 
+use crate::picture::{I420, RawPicture};
+
 #[repr(C)]
 struct Raw {
     _private: [u8; 0],
-}
-
-#[repr(C)]
-struct RawPicture {
-    width: c_int,
-    height: c_int,
-    y: *const c_uchar,
-    u: *const c_uchar,
-    v: *const c_uchar,
-    y_stride: c_int,
-    u_stride: c_int,
-    v_stride: c_int,
 }
 
 unsafe extern "C" {
@@ -75,10 +65,7 @@ unsafe impl Send for Decoder {}
 pub struct Picture<'a> {
     pub width: u32,
     pub height: u32,
-    y: &'a [u8],
-    u: &'a [u8],
-    v: &'a [u8],
-    strides: [u32; 3],
+    planes: I420<'a>,
 }
 
 impl Decoder {
@@ -147,32 +134,15 @@ impl Decoder {
             ..0 => bail!("could not decode a {:?} frame ({decoded})", self.codec),
             0 => Ok(None),
             _ => {
-                if raw.width <= 0
-                    || raw.height <= 0
-                    || raw.y_stride <= 0
-                    || raw.u_stride <= 0
-                    || raw.v_stride <= 0
-                {
+                // SAFETY: the decoder's planes hold the picture's rows of luma
+                // and half as many of each chroma plane, at its strides.
+                let Some(planes) = (unsafe { I420::from_raw(&raw) }) else {
                     bail!("the {:?} decoder gave an empty picture", self.codec);
-                }
-                let (width, height) = (raw.width as u32, raw.height as u32);
-                let chroma = height.div_ceil(2) as usize;
-                // SAFETY: the decoder's planes hold `height` rows of luma and
-                // half as many of each chroma plane, at these strides.
-                let plane = |data: *const c_uchar, stride: c_int, rows: usize| unsafe {
-                    std::slice::from_raw_parts(data, stride as usize * rows)
                 };
                 Ok(Some(Picture {
-                    width,
-                    height,
-                    y: plane(raw.y, raw.y_stride, height as usize),
-                    u: plane(raw.u, raw.u_stride, chroma),
-                    v: plane(raw.v, raw.v_stride, chroma),
-                    strides: [
-                        raw.y_stride as u32,
-                        raw.u_stride as u32,
-                        raw.v_stride as u32,
-                    ],
+                    width: planes.width,
+                    height: planes.height,
+                    planes,
                 }))
             }
         }
@@ -181,27 +151,23 @@ impl Decoder {
 
 impl Picture<'_> {
     /// The picture's planes, as a feed's sink takes them.
-    pub fn i420(&self) -> crate::picture::I420<'_> {
-        crate::picture::I420 {
-            width: self.width,
-            height: self.height,
-            y: self.y,
-            u: self.u,
-            v: self.v,
-            strides: self.strides,
-        }
+    pub fn i420(&self) -> I420<'_> {
+        self.planes
     }
 
     /// Writes the picture as RGBA, `width * 4` bytes a row.
     pub fn to_rgba(&self, out: &mut [u8]) {
+        let I420 {
+            y, u, v, strides, ..
+        } = self.planes;
         // libyuv's ABGR is R, G, B, A in memory.
         yuv_helper::i420_to_abgr(
-            self.y,
-            self.strides[0],
-            self.u,
-            self.strides[1],
-            self.v,
-            self.strides[2],
+            y,
+            strides[0],
+            u,
+            strides[1],
+            v,
+            strides[2],
             out,
             self.width * 4,
             self.width as i32,

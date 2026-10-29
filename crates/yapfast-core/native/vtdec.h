@@ -6,19 +6,14 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "picture.h"
+
 enum { VTDEC_H264, VTDEC_HEVC };
 
-/* A decoded picture as I420 planes, valid until the next call on its
- * decoder. */
+/* A decoded picture: its I420 planes, valid until the next call on its
+ * decoder, when it shows, and its colours. */
 struct vtdec_picture {
-  int width;
-  int height;
-  const uint8_t *y;
-  const uint8_t *u;
-  const uint8_t *v;
-  int y_stride;
-  int u_stride;
-  int v_stride;
+  struct yapfast_picture planes;
   int64_t pts;
   /* 1 for BT.709 colours, 0 for BT.601, -1 when the stream doesn't say. */
   int bt709;

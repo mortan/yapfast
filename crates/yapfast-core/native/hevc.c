@@ -7,9 +7,7 @@
 #include <string.h>
 
 #include "libavcodec/avcodec.h"
-
-/* The widest or tallest picture a stream may send, as in decode.c. */
-enum { MAX_SIDE = 8192 };
+#include "picture.h"
 
 struct yapfast_hevc {
   AVCodecContext *context;
@@ -17,17 +15,6 @@ struct yapfast_hevc {
   AVFrame *frame;
   unsigned char *padded;
   size_t padded_size;
-};
-
-struct yapfast_picture {
-  int width;
-  int height;
-  const unsigned char *y;
-  const unsigned char *u;
-  const unsigned char *v;
-  int y_stride;
-  int u_stride;
-  int v_stride;
 };
 
 void yapfast_hevc_free(struct yapfast_hevc *decoder) {

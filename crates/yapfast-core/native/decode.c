@@ -12,14 +12,11 @@
 #else
 #include "libavcodec/avcodec.h"
 #endif
+#include "picture.h"
 #include "vpx/vp8dx.h"
 #include "vpx/vpx_decoder.h"
 
 enum { YAPFAST_VP8 = 0, YAPFAST_H264 = 1 };
-
-/* The widest or tallest picture a stream may send: a 4K stream fits, and a
- * stream can't make Yapfast take more memory than that by claiming a bigger one. */
-enum { MAX_SIDE = 8192 };
 
 struct yapfast_decoder {
   int codec;
@@ -33,17 +30,6 @@ struct yapfast_decoder {
   unsigned char *padded;
   size_t padded_size;
 #endif
-};
-
-struct yapfast_picture {
-  int width;
-  int height;
-  const unsigned char *y;
-  const unsigned char *u;
-  const unsigned char *v;
-  int y_stride;
-  int u_stride;
-  int v_stride;
 };
 
 void yapfast_decoder_free(struct yapfast_decoder *decoder) {
@@ -140,8 +126,7 @@ int yapfast_decoder_decode(struct yapfast_decoder *decoder, const unsigned char 
   struct vtdec_picture got;
   decoded = vtdec_picture(decoder->vt, 0, &got);
   if (decoded <= 0) return decoded;
-  *picture = (struct yapfast_picture){got.width,    got.height,   got.y,       got.u, got.v,
-                                      got.y_stride, got.u_stride, got.v_stride};
+  *picture = got.planes;
   return 1;
 #else
   /* FFmpeg's parsers may read a little past the end. */

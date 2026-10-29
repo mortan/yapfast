@@ -11,7 +11,7 @@ use std::{
     },
 };
 
-/// A picture's planes as native code lays them out; see `native/picture.c`.
+/// A picture's planes as native code lays them out; see `native/picture.h`.
 #[repr(C)]
 pub(crate) struct RawPicture {
     pub width: c_int,

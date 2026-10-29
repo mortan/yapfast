@@ -15,23 +15,13 @@
 
 #include "libyuv/convert.h"
 #include "libyuv/scale.h"
+#include "picture.h"
 
 #if !__has_feature(objc_arc)
 #error "camera_mac.m needs -fobjc-arc"
 #endif
 
-/* The same layout as decode.c's: planes valid until the callback returns. */
-struct yapfast_picture {
-  int width;
-  int height;
-  const unsigned char *y;
-  const unsigned char *u;
-  const unsigned char *v;
-  int y_stride;
-  int u_stride;
-  int v_stride;
-};
-
+/* The planes stay valid until the callback returns. */
 typedef void (*yapfast_camera_frame)(void *user, const struct yapfast_picture *picture);
 typedef void (*yapfast_camera_each)(void *user, const char *name, const char *id);
 

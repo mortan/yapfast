@@ -3,18 +3,7 @@
  * buffers the caller keeps, so no frame needs a buffer of its own. */
 #include "libyuv/convert_argb.h"
 #include "libyuv/scale.h"
-
-/* The same layout as decode.c's. */
-struct yapfast_picture {
-  int width;
-  int height;
-  const unsigned char *y;
-  const unsigned char *u;
-  const unsigned char *v;
-  int y_stride;
-  int u_stride;
-  int v_stride;
-};
+#include "picture.h"
 
 /* Scales `picture` into `scratch`, an I420 buffer of `width` by `height`,
  * unless it's that size already, and converts it to RGBA in `rgba`, whose

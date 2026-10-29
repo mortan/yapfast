@@ -15,21 +15,11 @@
 #include "modules/video_capture/raw_video_sink_interface.h"
 #include "modules/video_capture/video_capture.h"
 #include "modules/video_capture/video_capture_factory.h"
+#include "picture.h"
 
 extern "C" {
 
-/* The same layout as decode.c's: planes valid until the callback returns. */
-struct yapfast_picture {
-  int width;
-  int height;
-  const unsigned char *y;
-  const unsigned char *u;
-  const unsigned char *v;
-  int y_stride;
-  int u_stride;
-  int v_stride;
-};
-
+/* The planes stay valid until the callback returns. */
 typedef void (*yapfast_camera_frame)(void *user, const struct yapfast_picture *picture);
 
 }  // extern "C"
