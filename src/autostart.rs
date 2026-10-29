@@ -27,7 +27,9 @@ pub fn set(on: bool) -> std::io::Result<()> {
     }
 }
 
-/// Points an entry at this Yapfast, after its folder moved or an update.
+/// Rewrites an entry that's on for this Yapfast: after its folder moved, an
+/// update, or for an older macOS agent's path. An unbundled macOS binary's
+/// agent shows as off once that binary is gone, so it isn't rewritten.
 pub fn refresh() {
     if enabled()
         && let Err(error) = set(true)
@@ -459,6 +461,8 @@ mod macos {
     }
 
     /// launchd starts it as the person signs in, in their graphical session.
+    /// Its program is Apple's `open`, so the bundle it belongs to is named,
+    /// which launchd ignores and System Settings › Login Items shows it by.
     pub(super) fn plist(command: &[String]) -> String {
         let arguments: String = command
             .iter()
@@ -471,7 +475,11 @@ mod macos {
              <plist version=\"1.0\">\n\
              <dict>\n\
              \t<key>Label</key>\n\
-             \t<string>{}</string>\n\
+             \t<string>{id}</string>\n\
+             \t<key>AssociatedBundleIdentifiers</key>\n\
+             \t<array>\n\
+             \t\t<string>{id}</string>\n\
+             \t</array>\n\
              \t<key>ProgramArguments</key>\n\
              \t<array>\n\
              {arguments}\
@@ -484,7 +492,7 @@ mod macos {
              \t<string>Aqua</string>\n\
              </dict>\n\
              </plist>\n",
-            crate::icon::APP_ID,
+            id = crate::icon::APP_ID,
         )
     }
 
@@ -523,6 +531,10 @@ mod macos {
 <dict>
 	<key>Label</key>
 	<string>io.github.yapfast.Yapfast</string>
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>io.github.yapfast.Yapfast</string>
+	</array>
 	<key>ProgramArguments</key>
 	<array>
 		<string>/usr/bin/open</string>

@@ -55,9 +55,10 @@ the launchd agent `~/Library/LaunchAgents/io.github.yapfast.Yapfast.plist`.
 Each window reads it, so turning Yapfast off in Task Manager's Startup apps
 (an odd first byte in `Explorer\StartupApproved\Run`), or a desktop setting
 `Hidden=true`, a `Disabled` key in the agent, or deleting the file, shows as
-off. Turning it on here clears Task Manager's record too. Each start, outside
-the preview, rewrites an entry that's on with this Yapfast's path, so moving
-its folder or an update keeps it working. The entry keeps `--data-dir` if
+off. Turning it on here clears Task Manager's record too. On Windows and
+Linux, each start, outside the preview, rewrites an entry that's on with this
+Yapfast's path, so moving its folder or an update keeps it working; macOS's
+names no path for the app (below). The entry keeps `--data-dir` if
 Yapfast had one; an AppImage's entry names the AppImage, not its temporary
 mount. The preview, and platforms without an entry, don't show the switch.
 The Windows installer's "Start Yapfast automatically when Windows starts"
@@ -72,10 +73,12 @@ from a temporary copy macOS makes for a quarantined app (App
 Translocation), gone after the next sign-in, which a path would have
 named. With the app deleted, `open` fails and nothing starts, though the
 file stays. Only a `yapfast` binary outside a bundle, such as one in
-`target/`, is named by its path; an agent whose binary is gone shows as
-off. The agent has `RunAtLoad`, `ProcessType` `Interactive` and
+`target/`, is named by its path; an agent whose binary is gone, moved or
+deleted, shows as off and isn't pointed at another, so the switch has to be
+turned on again. The agent has `RunAtLoad`, `ProcessType` `Interactive` and
 `LimitLoadToSessionType` `Aqua`, so launchd runs it once as the person
-signs in to the desktop. Yapfast writes the file and leaves loading it to
+signs in to the desktop, and `AssociatedBundleIdentifiers` names the app, so
+that Login Items shows it as Yapfast rather than as `open`. Yapfast writes the file and leaves loading it to
 the next sign-in; macOS says "Login item added" as the file appears.
 Turning Yapfast off in System Settings → General → Login Items keeps the
 file and records it in macOS's own list, which Yapfast doesn't read, so the
