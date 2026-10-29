@@ -45,6 +45,8 @@ mod callbacks;
 mod channel_settings;
 mod games;
 mod gifs;
+#[cfg(target_os = "macos")]
+mod mac_window;
 mod menus;
 mod messages;
 #[cfg(windows)]
@@ -283,7 +285,8 @@ const ZOOM_NOTE: Duration = Duration::from_millis(1200);
 
 /// Follows the native window's focus, for notifications, zooms the window
 /// with Ctrl (Cmd on macOS) and +, - and 0 or the scroll wheel, or a pinch,
-/// keeping the level in the layout, and takes files dropped on it.
+/// keeping the level in the layout, and takes files dropped on it. On macOS
+/// it takes Cmd+W, Cmd+M and Control-click too; see [`mac_window`].
 fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
     use slint::winit_030::{
         EventResult,
@@ -332,6 +335,8 @@ fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
         zoom::apply(window.window(), base.get(), level.get());
         let note = Rc::new(slint::Timer::default());
         let mut keys = zoom::Keys::default();
+        #[cfg(target_os = "macos")]
+        let mut conventions = mac_window::Conventions::default();
         // The winit window exists by the first event it sends.
         #[cfg(target_os = "linux")]
         let mut watching = false;
@@ -496,6 +501,10 @@ fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
                             });
                         }
                     }
+                    return EventResult::PreventDefault;
+                }
+                #[cfg(target_os = "macos")]
+                if conventions.event(event, slint_window) {
                     return EventResult::PreventDefault;
                 }
                 let step = match keys.event(event) {

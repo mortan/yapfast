@@ -244,6 +244,10 @@ display's scale factor by it, so the window lays out in fewer logical pixels,
 and zooming in stops before those would fall below the window's 800×560
 minimum, which would make it grow.
 
+On macOS Cmd+W closes the window as its close button does, to the menu bar,
+and Cmd+M minimizes it. A Control-click is a right click there, so it opens
+every menu a right click does (`src/ui/mac_window.rs`).
+
 The window starts at the size it had when Yapfast last ran, maximized if it
 was, and on Windows and macOS in the same place (`window` in `layout.json`,
 `src/ui/placement.rs`). Yapfast writes it a second after the window stops

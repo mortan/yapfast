@@ -83,8 +83,11 @@ Yapfast does on macOS what it does on Linux, apart from what's
   Yapfast's typeface lacks, so symbols and the styled letters names use,
   such as 𝓯𝓪𝓷𝓬𝔂, show (`src/emoji.rs`).
 - **Keys.** Cmd stands in for Ctrl in Yapfast's shortcuts, zoom, copy and
-  paste, and a pinch on the trackpad zooms too
-  ([chat UI](chat-ui.md#layout-and-look)).
+  paste, and a pinch on the trackpad zooms too. Cmd+W closes the window, to
+  the menu bar as its close button does, and Cmd+M minimizes it, which no
+  menu does, as Yapfast's app menu has no Window menu; a Control-click opens
+  the menus a right click does (`src/ui/mac_window.rs`,
+  [chat UI](chat-ui.md#layout-and-look)).
 - **Memory.** Closing the window gives the allocator's free pages back with
   `malloc_zone_pressure_relief` ([the window](tray.md#the-window)).
 
