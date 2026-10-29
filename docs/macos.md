@@ -25,7 +25,9 @@ open target/dist/Yapfast.app
 ```
 
 Opened from Finder or the Dock, Yapfast logs to
-`~/Library/Logs/Yapfast/yapfast.log`; run from a terminal, it logs there.
+`~/Library/Logs/Yapfast/yapfast.log`, or with `--data-dir` to `yapfast.log`
+in that folder, so each folder's Yapfast keeps its own; run from a terminal,
+it logs there.
 `YAPFAST_LOG=debug` adds its debug logs, as elsewhere.
 
 ## What works, and how

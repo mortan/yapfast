@@ -82,10 +82,8 @@ fn main() -> Result<()> {
         _ => logging::init(),
     }
     #[cfg(all(target_os = "macos", feature = "desktop"))]
-    match std::env::var_os("HOME") {
-        Some(home) if !has_output() => logging::init_to_file(
-            &std::path::Path::new(&home).join("Library/Logs/Yapfast/yapfast.log"),
-        ),
+    match log_file(&arguments) {
+        Some(path) if !has_output() => logging::init_to_file(&path),
         _ => logging::init(),
     }
     #[cfg(not(all(any(windows, target_os = "macos"), feature = "desktop")))]
@@ -186,7 +184,7 @@ fn has_console() -> bool {
 
 /// Whether Yapfast's output reaches someone: a terminal, file or pipe. Opened
 /// from Finder or the Dock, launchd gives it /dev/null, so it logs to
-/// ~/Library/Logs, where Console finds it.
+/// [`log_file`].
 #[cfg(all(target_os = "macos", feature = "desktop"))]
 fn has_output() -> bool {
     use std::os::{fd::AsFd, unix::fs::MetadataExt};
@@ -199,6 +197,23 @@ fn has_output() -> bool {
     ) {
         (Ok(output), Ok(null)) => output.rdev() != null.rdev(),
         _ => false,
+    }
+}
+
+/// The log without a terminal: in `--data-dir`'s folder, so a Yapfast on
+/// another folder keeps its own, as on Windows; or else in
+/// ~/Library/Logs/Yapfast, where Console finds it.
+#[cfg(all(target_os = "macos", feature = "desktop"))]
+fn log_file(arguments: &[String]) -> Option<std::path::PathBuf> {
+    match arguments
+        .iter()
+        .position(|argument| argument == "--data-dir")
+    {
+        Some(index) => arguments
+            .get(index + 1)
+            .map(|folder| std::path::Path::new(folder).join("yapfast.log")),
+        None => std::env::var_os("HOME")
+            .map(|home| std::path::Path::new(&home).join("Library/Logs/Yapfast/yapfast.log")),
     }
 }
 
@@ -308,4 +323,25 @@ fn renderer_argument(arguments: &mut Vec<String>) -> Result<Option<&'static str>
         bail!("specify --renderer once");
     }
     Ok(Some(renderer))
+}
+
+#[cfg(test)]
+mod tests {
+    #[cfg(all(target_os = "macos", feature = "desktop"))]
+    #[test]
+    fn another_data_folder_keeps_its_own_log() {
+        use super::*;
+        let arguments = |given: &[&str]| -> Vec<String> {
+            given.iter().map(|argument| argument.to_string()).collect()
+        };
+        assert_eq!(
+            log_file(&arguments(&["--data-dir", "/tmp/second"])),
+            Some("/tmp/second/yapfast.log".into())
+        );
+        let home = std::env::var_os("HOME").unwrap();
+        assert_eq!(
+            log_file(&arguments(&["--background"])),
+            Some(std::path::Path::new(&home).join("Library/Logs/Yapfast/yapfast.log"))
+        );
+    }
 }
