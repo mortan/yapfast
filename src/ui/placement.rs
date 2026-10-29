@@ -6,14 +6,15 @@ use super::*;
 /// The window's size and place while not maximized, and whether it was.
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub(super) struct Placement {
-    /// Inside the frame, in physical pixels.
+    /// Inside the frame, in physical pixels, or on macOS in points: macOS
+    /// places windows in points, the same on every screen whatever its scale.
     width: u32,
     height: u32,
     /// The frame's top left corner on the desktop, or on macOS the content's.
     /// Wayland doesn't say, and on X11 a monitor gone since could leave it off
-    /// screen, so only Windows, which tells where the monitors are, keeps it
-    /// from one start to the next.
-    #[cfg_attr(not(windows), serde(skip))]
+    /// screen, so only Windows and macOS, which tell where the monitors are,
+    /// keep it from one start to the next.
+    #[cfg_attr(not(any(windows, target_os = "macos")), serde(skip))]
     position: Option<[i32; 2]>,
     maximized: bool,
 }
@@ -25,13 +26,30 @@ const SETTLE: Duration = Duration::from_secs(1);
 /// fit the desktop's monitors.
 pub(super) fn place(window: &YapfastWindow, placement: &Placement) {
     let native = window.window();
-    let (size, position) = platform::fit(
-        slint::PhysicalSize::new(placement.width, placement.height),
-        placement.position,
-    );
-    native.set_size(size);
-    if let Some([x, y]) = position {
-        native.set_position(slint::PhysicalPosition::new(x, y));
+    #[cfg(not(target_os = "macos"))]
+    {
+        let (size, position) = platform::fit(
+            slint::PhysicalSize::new(placement.width, placement.height),
+            placement.position,
+        );
+        native.set_size(size);
+        if let Some([x, y]) = position {
+            native.set_position(slint::PhysicalPosition::new(x, y));
+        }
+    }
+    // In points, which winit hands AppKit as they are: physical pixels it
+    // would convert with the main screen's scale, not that of the screen
+    // the window was on.
+    #[cfg(target_os = "macos")]
+    {
+        let (size, position) = platform::fit(
+            [f64::from(placement.width), f64::from(placement.height)],
+            placement.position,
+        );
+        native.set_size(slint::LogicalSize::new(size[0] as f32, size[1] as f32));
+        if let Some([x, y]) = position {
+            native.set_position(slint::LogicalPosition::new(x as f32, y as f32));
+        }
     }
     // Maximized over the size and place above, which un-maximizing returns to.
     native.set_maximized(placement.maximized);
@@ -45,16 +63,19 @@ pub(super) fn moved(adapter: &mut Adapter, window: &YapfastWindow) {
     if native.is_minimized() {
         return;
     }
-    let size = native.size();
-    // winit on macOS makes a window at a place by its content's corner, not
-    // its frame's, so that's the corner kept there.
-    let position = native
-        .with_winit_window(|winit| match cfg!(target_os = "macos") {
-            true => winit.inner_position().ok(),
-            false => winit.outer_position().ok(),
-        })
-        .flatten()
-        .map(|position| [position.x, position.y]);
+    #[cfg(not(target_os = "macos"))]
+    let (size, position) = {
+        let size = native.size();
+        let position = native
+            .with_winit_window(|winit| winit.outer_position().ok())
+            .flatten()
+            .map(|position| [position.x, position.y]);
+        ([size.width, size.height], position)
+    };
+    #[cfg(target_os = "macos")]
+    let Some((size, position)) = native.with_winit_window(platform::measure) else {
+        return;
+    };
     let maximized = native.is_maximized();
     let now = match adapter.layout.window {
         // Maximized, the window keeps the size and place it goes back to.
@@ -63,8 +84,8 @@ pub(super) fn moved(adapter: &mut Adapter, window: &YapfastWindow) {
             ..before
         },
         _ => Placement {
-            width: size.width,
-            height: size.height,
+            width: size[0],
+            height: size[1],
             position,
             maximized,
         },
@@ -156,7 +177,208 @@ mod platform {
     }
 }
 
-#[cfg(not(windows))]
+#[cfg(target_os = "macos")]
+mod platform {
+    use objc2_app_kit::NSScreen;
+    use objc2_foundation::{MainThreadMarker, NSRect};
+    use slint::winit_030::winit::window::Window;
+
+    /// How much of the window's top must show on a screen to keep it where
+    /// it was: the title bar, by which it's moved, in points.
+    const TITLE_BAR: f64 = 28.;
+
+    /// A screen's whole area and the part windows go in, without the menu
+    /// bar and the Dock, in points from the main screen's top left corner,
+    /// as winit places windows.
+    #[derive(Clone, Copy, Debug)]
+    struct Screen {
+        frame: Rect,
+        visible: Rect,
+    }
+
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Rect {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+    }
+
+    impl Rect {
+        /// The area two rectangles share.
+        fn overlap(&self, other: &Rect) -> f64 {
+            let width = (self.x + self.width).min(other.x + other.width) - self.x.max(other.x);
+            let height = (self.y + self.height).min(other.y + other.height) - self.y.max(other.y);
+            width.max(0.) * height.max(0.)
+        }
+    }
+
+    /// The window's size and its content's top left corner, in points.
+    pub(super) fn measure(winit: &Window) -> ([u32; 2], Option<[i32; 2]>) {
+        let scale = winit.scale_factor();
+        let size = winit.inner_size().to_logical::<u32>(scale);
+        let position = winit
+            .inner_position()
+            .ok()
+            .map(|position| position.to_logical::<i32>(scale))
+            .map(|position| [position.x, position.y]);
+        ([size.width, size.height], position)
+    }
+
+    /// The screens, the main one, which has the menu bar, first.
+    fn screens() -> Vec<Screen> {
+        let Some(main_thread) = MainThreadMarker::new() else {
+            return Vec::new();
+        };
+        let screens = NSScreen::screens(main_thread).to_vec();
+        // AppKit counts up from the main screen's bottom; winit down from its top.
+        let Some(top) = screens.first().map(|main| {
+            let frame = main.frame();
+            frame.origin.y + frame.size.height
+        }) else {
+            return Vec::new();
+        };
+        let flip = |rect: NSRect| Rect {
+            x: rect.origin.x,
+            y: top - rect.origin.y - rect.size.height,
+            width: rect.size.width,
+            height: rect.size.height,
+        };
+        screens
+            .iter()
+            .map(|screen| Screen {
+                frame: flip(screen.frame()),
+                visible: flip(screen.visibleFrame()),
+            })
+            .collect()
+    }
+
+    /// Forgets the place if the title bar would show on no screen, as after
+    /// one was unplugged, and shrinks the window to the room on the screen
+    /// it goes on if it no longer fits there.
+    pub(super) fn fit(size: [f64; 2], position: Option<[i32; 2]>) -> ([f64; 2], Option<[i32; 2]>) {
+        fit_on(&screens(), size, position)
+    }
+
+    fn fit_on(
+        screens: &[Screen],
+        [width, height]: [f64; 2],
+        position: Option<[i32; 2]>,
+    ) -> ([f64; 2], Option<[i32; 2]>) {
+        if screens.is_empty() {
+            return ([width, height], position);
+        }
+        let at = |[x, y]: [i32; 2], top: f64, height: f64| Rect {
+            x: f64::from(x),
+            y: f64::from(y) - top,
+            width,
+            height,
+        };
+        let position = position.filter(|&corner| {
+            let title_bar = at(corner, TITLE_BAR, TITLE_BAR);
+            screens
+                .iter()
+                .any(|screen| screen.frame.overlap(&title_bar) > 0.)
+        });
+        // The screen most of the window is on, or without a place the main
+        // one, where winit centres it.
+        let screen = match position {
+            Some(corner) => {
+                let window = at(corner, 0., height);
+                screens.iter().max_by(|a, b| {
+                    a.frame
+                        .overlap(&window)
+                        .total_cmp(&b.frame.overlap(&window))
+                })
+            }
+            None => screens.first(),
+        };
+        let Some(room) = screen.map(|screen| screen.visible) else {
+            return ([width, height], position);
+        };
+        let size = [
+            width.min(room.width),
+            height.min((room.height - TITLE_BAR).max(0.)),
+        ];
+        (size, position)
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn screen(x: f64, y: f64, width: f64, height: f64) -> Screen {
+            let frame = Rect {
+                x,
+                y,
+                width,
+                height,
+            };
+            // The menu bar along the top, 24 points.
+            let visible = Rect {
+                y: y + 24.,
+                height: height - 24.,
+                ..frame
+            };
+            Screen { frame, visible }
+        }
+
+        #[test]
+        fn keeps_a_place_on_a_screen_and_drops_one_on_none() {
+            let laptop = screen(0., 0., 1512., 982.);
+            let monitor = screen(1512., -200., 2560., 1440.);
+            let both = [laptop, monitor];
+            let on_monitor = Some([2000, 100]);
+            assert_eq!(
+                fit_on(&both, [1400., 900.], on_monitor),
+                ([1400., 900.], on_monitor)
+            );
+            // The monitor unplugged: macOS chooses the place, on the laptop,
+            // and the window shrinks to its room below the menu bar.
+            assert_eq!(
+                fit_on(&[laptop], [1400., 1200.], on_monitor),
+                ([1400., 982. - 24. - TITLE_BAR], None)
+            );
+            // Only the title bar has to show.
+            assert_eq!(
+                fit_on(&[laptop], [800., 600.], Some([1000, 970])).1,
+                Some([1000, 970])
+            );
+            assert_eq!(
+                fit_on(&[laptop], [800., 600.], Some([-900, 100])).1,
+                None,
+                "off the left edge"
+            );
+            assert_eq!(
+                fit_on(&[laptop], [800., 600.], Some([100, 1020])).1,
+                None,
+                "below the bottom"
+            );
+        }
+
+        #[test]
+        fn shrinks_to_the_screen_it_goes_on() {
+            let laptop = screen(0., 0., 1512., 982.);
+            let monitor = screen(1512., 0., 2560., 1440.);
+            assert_eq!(
+                fit_on(&[laptop, monitor], [2400., 1300.], Some([1600, 100])).0,
+                [2400., 1300.]
+            );
+            assert_eq!(
+                fit_on(&[laptop, monitor], [2000., 1300.], Some([100, 100])).0,
+                [1512., 982. - 24. - TITLE_BAR],
+                "mostly on the laptop"
+            );
+            assert_eq!(
+                fit_on(&[], [2400., 1300.], Some([100, 100])),
+                ([2400., 1300.], Some([100, 100])),
+                "no screens known"
+            );
+        }
+    }
+}
+
+#[cfg(not(any(windows, target_os = "macos")))]
 mod platform {
     /// The desktop fits the window to the screen itself.
     pub(super) fn fit(

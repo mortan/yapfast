@@ -244,16 +244,19 @@ and zooming in stops before those would fall below the window's 800×560
 minimum, which would make it grow.
 
 The window starts at the size it had when Yapfast last ran, maximized if it
-was, and on Windows in the same place (`window` in `layout.json`,
+was, and on Windows and macOS in the same place (`window` in `layout.json`,
 `src/ui/placement.rs`). Yapfast writes it a second after the window stops
 moving or resizing, and as it quits, so a Windows shutdown that ends Yapfast
 without closing it keeps it too. Maximized, it keeps the size and place
-un-maximizing returns to. On Windows a place whose title bar would show on no
-monitor, as after one was unplugged, is dropped and Windows chooses one, and a
-size larger than the monitor's work area shrinks to fit it. Linux keeps only
-the size: Wayland doesn't let a window choose its place, and an X11 place could
-be on a monitor that's gone. A window made again from the tray comes back
-from the same record.
+un-maximizing returns to. On Windows and macOS a place whose title bar would
+show on no monitor, as after one was unplugged, is dropped and the system
+chooses one, and a size larger than the room on the monitor the window goes
+on, without the taskbar, or the menu bar and the Dock, shrinks to fit it.
+Windows keeps the size and place in physical pixels; macOS in points, as it
+places windows, so a window last on a screen of another scale than the main
+one's comes back as it was. Linux keeps only the size: Wayland doesn't let a
+window choose its place, and an X11 place could be on a monitor that's gone.
+A window made again from the tray comes back from the same record.
 
 On Linux desktops that give their windows title bars, Yapfast draws its own
 in place of the desktop's, as Discord does (`src/ui/title_bar.rs`,
