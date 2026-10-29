@@ -138,7 +138,8 @@ else the largest), and an `AVCaptureSession` films it in NV12, dropping frames
 that come late. It films at 30 frames a second, or the nearest rate the format
 allows, such as 29.97 on some capture devices. A format that only films
 faster, such as a fixed 60, has the extra frames dropped by their timestamps
-before they're converted, as libwebrtc's module caps the rate. A device that
+before they're converted, as libwebrtc's module caps the rate: a fixed 60
+gives a steady 30, and a fixed 50 a steady 25. A device that
 refuses the format or the rate films in its own, and the refusal is logged.
 Each frame arrives on the camera's own serial dispatch queue, where libyuv
 converts it into the same reused I420 buffers and scales it down if it's

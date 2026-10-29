@@ -69,7 +69,8 @@ static struct yapfast_picture planes_picture(const struct planes *planes) {
   /* Seconds between frames sent on, and when the next is due, as frames'
    * presentation times go: a format that can't film at the rate asked,
    * such as a fixed 60 a second, films faster, and the extra frames are
-   * dropped here as camera.cc's capture module drops them. */
+   * dropped here as camera.cc's capture module drops them. A fixed 60 gives
+   * a steady 30, and a fixed 50 a steady 25. */
   double interval;
   double due;
   struct planes converted;
@@ -91,12 +92,15 @@ static struct yapfast_picture planes_picture(const struct planes *planes) {
   CMTime time = CMSampleBufferGetPresentationTimeStamp(sampleBuffer);
   if (CMTIME_IS_NUMERIC(time)) {
     /* A quarter of a frame early still counts, so jitter doesn't drop
-     * frames of a camera filming at the rate asked; a time further back
-     * than the frames sent can be means the clock started over. */
+     * frames of a camera filming at the rate asked. The next is due a frame
+     * after this one, or after when this one was due if it came early, so
+     * that a camera filming twice as fast has every other frame half a frame
+     * early, well clear of the quarter. A time further back than the frames
+     * sent can be means the clock started over. */
     double at = CMTimeGetSeconds(time), early = interval / 4;
     if (due - at > 2 * interval) due = at;
     if (at + early < due) return;
-    due = fmax(due, at - early) + interval;
+    due = fmax(due, at) + interval;
   }
   CVImageBufferRef image = CMSampleBufferGetImageBuffer(sampleBuffer);
   if (!image) return;
