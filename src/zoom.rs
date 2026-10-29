@@ -153,10 +153,12 @@ impl Keys {
                 step
             }
             WindowEvent::Focused(false) => {
-                // Ctrl or Cmd may be let go elsewhere.
+                // Ctrl or Cmd, and the keys that zoomed, may be let go
+                // elsewhere, unseen.
                 self.control = false;
                 self.alt = false;
                 self.scrolled = 0.;
+                self.pressed.clear();
                 Outcome::Pass
             }
             _ => Outcome::Pass,
@@ -245,6 +247,21 @@ pub fn apply(window: &slint::Window, base: f32, level: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A key that zoomed and was let go after the window lost the focus
+    /// leaves no release to keep from Slint.
+    #[test]
+    fn losing_the_focus_forgets_the_keys_that_zoomed() {
+        let mut keys = Keys {
+            pressed: vec![PhysicalKey::Code(KeyCode::Equal)],
+            ..Default::default()
+        };
+        assert!(matches!(
+            keys.event(&WindowEvent::Focused(false)),
+            Outcome::Pass
+        ));
+        assert!(keys.pressed.is_empty());
+    }
 
     #[test]
     fn steps_through_the_levels() {

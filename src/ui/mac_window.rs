@@ -123,8 +123,12 @@ impl Conventions {
                 }
             }
             WindowEvent::Focused(false) => {
-                // Let go elsewhere.
+                // Let go elsewhere, unseen: Cmd+M's M comes up after the
+                // window went, and its release would keep a plain M's from
+                // Slint.
                 self.modifiers = ModifiersState::empty();
+                self.pressed.clear();
+                self.clicking = false;
                 Outcome::Pass
             }
             _ => Outcome::Pass,
@@ -184,6 +188,22 @@ mod tests {
         assert_eq!(shortcut(&key("w"), w, ModifiersState::empty()), None);
         assert_eq!(shortcut(&key("w"), w, cmd | ModifiersState::SHIFT), None);
         assert_eq!(shortcut(&key("w"), w, ModifiersState::CONTROL), None);
+    }
+
+    /// What was held as the window lost the focus, such as Cmd+M's M, comes
+    /// up elsewhere, so it's forgotten.
+    #[test]
+    fn losing_the_focus_forgets_what_was_held() {
+        let mut conventions = Conventions {
+            pressed: vec![PhysicalKey::Code(KeyCode::KeyM)],
+            clicking: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            conventions.outcome(&WindowEvent::Focused(false)),
+            Outcome::Pass
+        );
+        assert!(conventions.pressed.is_empty() && !conventions.clicking);
     }
 
     #[test]
