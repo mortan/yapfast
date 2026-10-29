@@ -280,7 +280,8 @@ works while muted, outside calls and in the preview, and it never touches the
 call: muted, nothing is published or sent. It shows as "Input level" in the
 system's recording streams on Linux. On Windows it reads the microphone
 through WASAPI, and on macOS through Core Audio, which needs the Microphone
-permission; without it macOS hands over silence.
+permission; without it macOS hands over silence, and the meter, which asks
+AVFoundation each second whether it's refused, says where to allow it.
 
 ## Run the local demo
 

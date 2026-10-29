@@ -86,7 +86,7 @@ The sentences it shows come from the bundle's `Info.plist`.
 
 | Permission | For | When macOS asks | Without it |
 | --- | --- | --- | --- |
-| Microphone | Calls and the input meter | The first time Yapfast opens a microphone | macOS hands over silence: the meter stays still and nobody hears you |
+| Microphone | Calls and the input meter | The first time Yapfast opens a microphone | macOS hands over silence: nobody hears you, the meter stays still and says where to allow it, and the log says so as a call's microphone opens |
 | Camera | Your camera in calls, Settings' camera test | The first time a camera opens | The camera fails to open, saying where to allow it; a first refusal from Settings' test or preview leaves it empty, and the next open says so |
 | Screen & System Audio Recording | Go Live's screens and windows | The first time the share menu opens | The share menu stays shut, with a notice to allow it and then quit and reopen Yapfast, which macOS needs before it applies |
 | System Audio Recording, in the same pane | Go Live's sound, through the process tap | The first time a stream's sound starts | macOS hands over silence, so the stream goes without sound; once other apps have played for 10 s with only silence heard, the log says so |

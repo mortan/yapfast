@@ -22,6 +22,7 @@ struct Shared {
     level: AtomicU32,
     stop: AtomicBool,
     failed: AtomicBool,
+    denied: AtomicBool,
 }
 
 /// Whether this platform can show the level.
@@ -58,6 +59,11 @@ impl InputMeter {
     pub fn failed(&self) -> bool {
         self.shared.failed.load(Ordering::Relaxed)
     }
+
+    /// The system refuses Yapfast the microphone, which hears silence.
+    pub fn denied(&self) -> bool {
+        self.shared.denied.load(Ordering::Relaxed)
+    }
 }
 
 impl Drop for InputMeter {
@@ -69,6 +75,9 @@ impl Drop for InputMeter {
 /// 16 kHz mono is plenty for a level, and 20 ms reads keep it lively.
 const RATE: u32 = 16_000;
 const CHUNK: usize = RATE as usize / 50;
+/// Reads between asking whether the system refuses the microphone, which
+/// the person may answer while the meter runs.
+const ASK_EVERY: usize = 50;
 
 fn measure(microphone: Option<&str>, shared: &Shared) -> anyhow::Result<()> {
     use anyhow::Context;
@@ -82,7 +91,13 @@ fn measure(microphone: Option<&str>, shared: &Shared) -> anyhow::Result<()> {
     .context("could not open the microphone")?;
     let mut chunk = [0i16; CHUNK];
     let mut shown = 0.0f32;
+    let mut reads = 0usize;
     while !shared.stop.load(Ordering::Relaxed) {
+        if reads.is_multiple_of(ASK_EVERY) {
+            let denied = crate::audio_io::microphone_denied();
+            shared.denied.store(denied, Ordering::Relaxed);
+        }
+        reads = reads.wrapping_add(1);
         input.read(&mut chunk).context("the microphone stopped")?;
         let power = chunk
             .iter()

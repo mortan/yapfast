@@ -2476,6 +2476,8 @@ pub(super) fn bind_callbacks(window: &YapfastWindow, adapter: &Rc<RefCell<Adapte
             window.set_input_level(meter.level());
             window.set_meter_note(SharedString::from(if !meter::AVAILABLE {
                 "The level meter isn't available on this system yet."
+            } else if meter.denied() {
+                "macOS doesn't let Yapfast use the microphone. Allow it in System Settings › Privacy & Security › Microphone."
             } else if meter.failed() {
                 "Yapfast can't read this microphone. Check that it's connected, or choose another."
             } else {

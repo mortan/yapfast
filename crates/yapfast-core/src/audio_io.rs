@@ -53,6 +53,15 @@ pub const AVAILABLE: bool = cfg!(any(
     target_os = "macos"
 ));
 
+/// Whether the system refuses Yapfast the microphone, which then records
+/// silence rather than failing to open; only macOS says.
+pub fn microphone_denied() -> bool {
+    #[cfg(target_os = "macos")]
+    return coreaudio::microphone_denied();
+    #[cfg(not(target_os = "macos"))]
+    false
+}
+
 /// The rate every stream runs at, unless it asks for another.
 pub const RATE: u32 = 48_000;
 
