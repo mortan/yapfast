@@ -139,7 +139,10 @@ itself, the Yapfast that started it and that one's other workers; a process
 joins Core Audio's list only once it uses sound, so the tap is updated as
 the list changes. It needs the System Audio Recording permission, which the
 app asks for with `NSAudioCaptureUsageDescription`; without it macOS hands
-over silence, and nothing is sent. Like Windows it can't leave other
+over silence, and nothing is sent, which the log says once other
+applications have played for 10 s with only silence heard. A tap that
+pauses for 2 s is opened again, and one that fails to leave a new Yapfast
+process out tries again a second later. Like Windows it can't leave other
 Discord clients out. Other systems share video only for now, and so does
 the test pattern. Two ignored tests check the capture against the
 machine's sound server with a quiet tone: another process's is heard, and

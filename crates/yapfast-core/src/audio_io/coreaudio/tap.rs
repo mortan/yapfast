@@ -11,18 +11,25 @@
 //! Yapfast's own processes are this one and, when it's a stream worker, the
 //! Yapfast that started it and that one's other workers, such as one playing
 //! a watched stream. A process is in Core Audio's list only once it uses
-//! sound, so the tap leaves out each that joins later, as the list changes.
+//! sound, so the tap leaves out each that joins later, as the list changes,
+//! and tries again a second later when that fails. A tap that stops calling
+//! back, or brings nothing, for 2 s is opened again, as Windows' capture
+//! goes on through a pause. Without the System Audio Recording permission
+//! macOS hands over silence; there's no asking whether it's given, so when
+//! other applications play and the tap has heard only silence for 10 s,
+//! Yapfast says so in its log, once.
 
 use std::{
     cell::UnsafeCell,
     ffi::{c_int, c_void},
     ptr,
     sync::{
-        Arc,
+        Arc, Mutex, PoisonError,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
     thread::JoinHandle,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context as _, Result, anyhow, bail, ensure};
@@ -36,6 +43,13 @@ use crate::audio_io::{Format, Hear, Heard, RATE, bytes_mut};
 const PROCESSES: u32 = u32::from_be_bytes(*b"prs#");
 const TAP_FORMAT: u32 = u32::from_be_bytes(*b"tfmt");
 const PROCESS_PID: u32 = u32::from_be_bytes(*b"ppid");
+const PROCESS_IS_RUNNING_OUTPUT: u32 = u32::from_be_bytes(*b"piro");
+/// How soon to leave Yapfast's processes out again after that failed, and
+/// to open the tap again after that failed.
+const RETRY: Duration = Duration::from_secs(1);
+/// How long the tap hears only silence while other applications play
+/// before Yapfast says macOS may be withholding their sound.
+const WITHHELD: Duration = Duration::from_secs(10);
 /// What `proc_pidinfo` calls `PROC_PIDT_SHORTBSDINFO`.
 const SHORT_BSD_INFO: c_int = 13;
 /// What `proc_pidpath` may write at most.
@@ -150,16 +164,52 @@ fn yapfast_processes() -> Vec<AudioObjectID> {
         .collect()
 }
 
+/// Whether a process the tap doesn't leave out plays sound now.
+fn others_playing(excluded: &[AudioObjectID]) -> bool {
+    objects(PROCESSES).into_iter().any(|process| {
+        !excluded.contains(&process)
+            && property::<u32>(process, PROCESS_IS_RUNNING_OUTPUT, sys::SCOPE_GLOBAL) == Some(1)
+    })
+}
+
+/// Set when the processes using sound change.
+static PROCESSES_CHANGED: AtomicBool = AtomicBool::new(false);
+
 /// Core Audio says the list of processes using sound changed.
 unsafe extern "C" fn processes_changed(
     _: AudioObjectID,
     _: u32,
     _: *const sys::PropertyAddress,
-    data: *mut c_void,
+    _: *mut c_void,
 ) -> OSStatus {
-    // SAFETY: `data` is the tap's `changed`, which outlives the listener.
-    unsafe { (*data.cast::<AtomicBool>()).store(true, Ordering::Relaxed) };
+    PROCESSES_CHANGED.store(true, Ordering::Relaxed);
     0
+}
+
+/// Has Core Audio call [`processes_changed`] from now on. Like the device
+/// listeners, it needs no data and stays, since Core Audio doesn't promise
+/// that removing one waits for a call under way.
+fn follow_processes() -> Result<()> {
+    static FOLLOWING: Mutex<bool> = Mutex::new(false);
+    let mut following = FOLLOWING.lock().unwrap_or_else(PoisonError::into_inner);
+    if !*following {
+        // Called in a stream worker, which runs no main run loop, too.
+        super::follow_devices();
+        // SAFETY: a listener that needs no data.
+        check(
+            unsafe {
+                sys::AudioObjectAddPropertyListener(
+                    sys::SYSTEM_OBJECT,
+                    &address(PROCESSES, sys::SCOPE_GLOBAL),
+                    processes_changed,
+                    ptr::null_mut(),
+                )
+            },
+            "can't follow Yapfast's processes",
+        )?;
+        *following = true;
+    }
+    Ok(())
 }
 
 /// The aggregate device's IO thread has the tap's samples: they go into the
@@ -254,17 +304,16 @@ impl Drop for Objects {
 struct Tap {
     io: *mut c_void,
     recording: Box<Recording>,
-    /// Set when the processes using sound change.
-    changed: Box<AtomicBool>,
     /// The process objects left out.
     excluded: Vec<AudioObjectID>,
     converter: Option<Converter>,
-    // Dropped last, once the IO proc and the listener are gone.
+    // Dropped last, once the IO proc is gone.
     objects: Objects,
 }
 
 impl Tap {
     fn open() -> Result<Self> {
+        follow_processes()?;
         let excluded = yapfast_processes();
         let mut objects = Objects { tap: 0, device: 0 };
         // SAFETY: the list is as long as the count says.
@@ -312,13 +361,11 @@ impl Tap {
         let mut tap = Self {
             io: ptr::null_mut(),
             recording,
-            changed: Box::new(AtomicBool::new(false)),
             excluded,
             converter,
             objects,
         };
-        // SAFETY: the recording and `changed` outlive the IO proc and the
-        // listener, which `drop` removes.
+        // SAFETY: the recording outlives the IO proc, which `drop` removes.
         unsafe {
             check(
                 AudioDeviceCreateIOProcID(
@@ -329,25 +376,13 @@ impl Tap {
                 ),
                 "can't record the tap",
             )?;
-            // The listener is called in a stream worker, which runs no
-            // main run loop, too.
-            super::follow_devices();
-            check(
-                sys::AudioObjectAddPropertyListener(
-                    sys::SYSTEM_OBJECT,
-                    &address(PROCESSES, sys::SCOPE_GLOBAL),
-                    processes_changed,
-                    (&raw const *tap.changed).cast_mut().cast(),
-                ),
-                "can't follow Yapfast's processes",
-            )?;
             check(
                 AudioDeviceStart(tap.objects.device, tap.io),
                 "can't start recording the tap",
             )?;
         }
         // Yapfast's processes that came to use sound while it opened.
-        tap.changed.store(true, Ordering::Relaxed);
+        PROCESSES_CHANGED.store(true, Ordering::Relaxed);
         Ok(tap)
     }
 
@@ -365,12 +400,36 @@ impl Tap {
         Ok(())
     }
 
-    /// Passes on what the tap hears, 10 ms at a time, until `stop`.
-    fn hear(&mut self, heard: &mut dyn FnMut(Heard<'_>), stop: &AtomicBool) -> Result<()> {
+    /// Passes on what the tap hears, 10 ms at a time, until `stop`; says
+    /// once, unless `warned`, when other applications play and it hears
+    /// only silence.
+    fn hear(
+        &mut self,
+        heard: &mut dyn FnMut(Heard<'_>),
+        stop: &AtomicBool,
+        warned: &mut bool,
+    ) -> Result<()> {
         let mut samples = vec![0f32; RATE as usize / 100 * 2];
+        let mut retry = None;
+        let mut silent_since = Instant::now();
         while !stop.load(Ordering::Relaxed) {
-            if self.changed.swap(false, Ordering::Relaxed) {
-                self.exclude()?;
+            if PROCESSES_CHANGED.swap(false, Ordering::Relaxed)
+                || retry.is_some_and(|at| Instant::now() >= at)
+            {
+                // A failure costs only a stale list, which the next try
+                // mends.
+                retry = match self.exclude() {
+                    Ok(()) => None,
+                    Err(error) => {
+                        if retry.is_none() {
+                            tracing::warn!(
+                                error = format!("{error:#}"),
+                                "trying again to leave Yapfast's processes out"
+                            );
+                        }
+                        Some(Instant::now() + RETRY)
+                    }
+                };
             }
             let recording = &self.recording;
             let bytes = bytes_mut(&mut samples);
@@ -380,10 +439,21 @@ impl Tap {
             }
             // Nothing playing: the mixer hears nothing rather than silence.
             if samples.iter().any(|&sample| sample != 0.0) {
+                silent_since = Instant::now();
                 heard(Heard::Samples {
                     source: 0,
                     samples: &samples,
                 });
+            } else if !*warned && silent_since.elapsed() >= WITHHELD {
+                if others_playing(&self.excluded) {
+                    tracing::warn!(
+                        "other applications play, but macOS hands Yapfast only silence: \
+                         allow Yapfast under System Settings › Privacy & Security › \
+                         Screen & System Audio Recording › System Audio Recording Only"
+                    );
+                    *warned = true;
+                }
+                silent_since = Instant::now();
             }
         }
         Ok(())
@@ -392,19 +462,13 @@ impl Tap {
 
 impl Drop for Tap {
     fn drop(&mut self) {
-        // SAFETY: stopping and destroying the IO proc and the listener this
-        // made; neither calls back once this returns.
+        // SAFETY: stopping and destroying the IO proc this made, which
+        // doesn't call back once this returns.
         unsafe {
             if !self.io.is_null() {
                 AudioDeviceStop(self.objects.device, self.io);
                 AudioDeviceDestroyIOProcID(self.objects.device, self.io);
             }
-            sys::AudioObjectRemovePropertyListener(
-                sys::SYSTEM_OBJECT,
-                &address(PROCESSES, sys::SCOPE_GLOBAL),
-                processes_changed,
-                (&raw const *self.changed).cast_mut().cast(),
-            );
         }
     }
 }
@@ -425,7 +489,7 @@ pub fn others(
             let mut tap = match Tap::open() {
                 Ok(tap) => {
                     let _ = opened.send(Ok(()));
-                    tap
+                    Some(tap)
                 }
                 Err(error) => {
                     let _ = opened.send(Err(error));
@@ -436,11 +500,31 @@ pub fn others(
                 source: 0,
                 process: None,
             });
-            if let Err(error) = tap.hear(&mut *heard, &stop) {
-                tracing::warn!(
-                    error = format!("{error:#}"),
-                    "stopped hearing other applications"
-                );
+            let (mut warned, mut paused) = (false, false);
+            while !stop.load(Ordering::Relaxed) {
+                let Some(open) = &mut tap else {
+                    match Tap::open() {
+                        Ok(open) => tap = Some(open),
+                        Err(error) => {
+                            tracing::debug!(
+                                error = format!("{error:#}"),
+                                "can't tap the other applications yet"
+                            );
+                            std::thread::sleep(RETRY);
+                        }
+                    }
+                    continue;
+                };
+                if let Err(error) = open.hear(&mut *heard, &stop, &mut warned) {
+                    let error = format!("{error:#}");
+                    if paused {
+                        tracing::debug!(error, "tapping the other applications again");
+                    } else {
+                        tracing::warn!(error, "tapping the other applications again");
+                    }
+                    paused = true;
+                    tap = None;
+                }
             }
             heard(Heard::Stopped { source: 0 });
         })

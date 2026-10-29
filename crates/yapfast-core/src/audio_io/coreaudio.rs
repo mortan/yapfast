@@ -213,12 +213,6 @@ mod sys {
             listener: Listener,
             data: *mut c_void,
         ) -> OSStatus;
-        pub fn AudioObjectRemovePropertyListener(
-            object: AudioObjectID,
-            address: *const PropertyAddress,
-            listener: Listener,
-            data: *mut c_void,
-        ) -> OSStatus;
     }
 
     #[link(name = "AudioToolbox", kind = "framework")]
