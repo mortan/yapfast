@@ -180,7 +180,10 @@ vmmap --summary PID       # by region, with the malloc zones' allocated and free
 `footprint --sample 1 --sample-duration 30 -p PID` samples it once a second.
 Report the footprint, the macOS counterpart of Linux's `RssAnon` and Windows'
 private working set. A stream worker, `yapfast --stream-worker`, is a process
-of its own; measure it by its PID too. The `stats` command of
+of its own; measure it by its PID too. Both figures count the frames they
+share ([Go Live](discord/go-live.md)), 25 MB at 1080p
+while watching or playing and 11 MB for the share preview, so subtract that
+once from their sum. The `stats` command of
 [measuring](measurements/README.md#how-to-measure) prints glibc's heap, so
 it prints nothing on macOS; the malloc zones in `vmmap --summary` stand in
 for it.
