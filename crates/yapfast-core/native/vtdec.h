@@ -27,9 +27,11 @@ struct vtdec;
  * the stream says it reorders; without, each as soon as it's decoded. */
 struct vtdec *vtdec_new(int codec, int reorder);
 void vtdec_free(struct vtdec *decoder);
-/* Takes a file's avcC record: its parameter sets and the size of its
- * samples' length prefixes. Without one, samples are Annex B. 0, -1 when
- * the record is damaged, or -2 for a stream VideoToolbox can't decode. */
+/* Takes a file's avcC record: the size of its samples' length prefixes,
+ * and its parameter sets, if it has any (an avc3 file's samples may carry
+ * them instead). Without one, samples are Annex B. 0, -1 when the record is
+ * damaged, -2 for a stream VideoToolbox can't decode, or -3 out of
+ * memory. */
 int vtdec_configure(struct vtdec *decoder, const uint8_t *record, size_t size);
 /* Decodes one access unit. 0, -1 when it couldn't be decoded, -2 for a
  * stream VideoToolbox can't decode or bigger than `max_side`, or -3 out of

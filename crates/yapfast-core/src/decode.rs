@@ -406,5 +406,38 @@ mod tests {
             assert_eq!(plain.len(), 30);
             assert!(plain == named, "the pictures with two PPSs differ");
         }
+
+        /// An avc3 file's avcC record may hold no parameter sets: its
+        /// samples carry them, length-prefixed as its slices are.
+        #[test]
+        fn takes_parameter_sets_from_the_samples_after_an_empty_avcc_record() {
+            unsafe extern "C" {
+                fn vtdec_configure(decoder: *mut Raw, record: *const u8, size: usize) -> c_int;
+            }
+            let file = fixture("stream-h264.h264");
+            let sample: Vec<u8> = access_units(&file)[0]
+                .iter()
+                .flat_map(|nal| [&(nal.len() as u32).to_be_bytes()[..], nal].concat())
+                .collect();
+            // Version 1, Baseline at level 1.3, 4-byte lengths, no SPS and
+            // no PPS.
+            let record = [1, 66, 0xc0, 13, 0xff, 0xe0, 0];
+            let mut decoder = Decoder {
+                // SAFETY: plain values; null means it couldn't start.
+                raw: unsafe { vtdec_new(0, 0) },
+                codec: Codec::H264,
+                decode: yapfast_vtdec_decode,
+                free: vtdec_free,
+            };
+            assert!(!decoder.raw.is_null());
+            // SAFETY: the record outlives the call.
+            let configured = unsafe { vtdec_configure(decoder.raw, record.as_ptr(), record.len()) };
+            assert_eq!(configured, 0);
+            let picture = decoder
+                .decode(&sample)
+                .unwrap()
+                .expect("a keyframe's picture");
+            assert_eq!((picture.width, picture.height), (320, 180));
+        }
     }
 }

@@ -489,7 +489,8 @@ void vtdec_free(struct vtdec *decoder) {
 
 int vtdec_configure(struct vtdec *decoder, const uint8_t *record, size_t size) {
   /* avcC: version 1, profile, compatibility, level, length size, then the
-   * SPSs and the PPSs, each with its size. */
+   * SPSs and the PPSs, each with its size. An avc3 file's may have none,
+   * and its samples carry them. */
   if (decoder->codec != VTDEC_H264 || size < 7 || record[0] != 1) return -1;
   int length_size = (record[4] & 3) + 1;
   if (length_size == 3) return -1;
@@ -498,7 +499,6 @@ int vtdec_configure(struct vtdec *decoder, const uint8_t *record, size_t size) {
     if (at >= size) return -1;
     int count = kind == 0 ? record[at] & 0x1f : record[at];
     at++;
-    if (count == 0) return -1;
     for (int set = 0; set < count; set++) {
       if (size - at < 2) return -1;
       size_t length = (size_t)record[at] << 8 | record[at + 1];
@@ -511,7 +511,7 @@ int vtdec_configure(struct vtdec *decoder, const uint8_t *record, size_t size) {
   }
   decoder->length_size = length_size;
   const struct parameter_set *sps = first_set(decoder, 0);
-  return read_sps(decoder, sps->data, sps->size);
+  return sps ? read_sps(decoder, sps->data, sps->size) : 0;
 }
 
 /* Appends a NAL unit with a 4-byte length to the sample. */

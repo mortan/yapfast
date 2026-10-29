@@ -190,7 +190,9 @@ static int open_decoder(struct yapfast_video *video, const AVCodecParameters *pa
       video->decoder = DECODER_VT;
       video->vt = vtdec_new(VTDEC_H264, 1);
       if (!video->vt) return FAILED;
-      /* Without an avcC record, as in avc3, samples are Annex B. */
+      /* An avcC record, as MP4 and Matroska have, tells the samples' length
+       * prefixes, and the parameter sets unless the samples carry them, as
+       * an avc3 file's may; without one, samples are Annex B. */
       if (parameters->extradata_size > 0 && parameters->extradata[0] == 1) {
         int configured =
             vtdec_configure(video->vt, parameters->extradata, (size_t)parameters->extradata_size);
