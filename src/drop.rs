@@ -22,9 +22,8 @@ pub enum Drag {
 /// the files hover.
 pub struct Pointer {
     source: Source,
-    /// The window's scale, from its physical pixels to its logical ones.
-    /// AppKit gives logical ones.
-    #[cfg(not(target_os = "macos"))]
+    /// The window's scale, from its physical pixels to its logical ones;
+    /// 1 for AppKit, which gives logical ones.
     scale: f64,
 }
 
@@ -56,8 +55,10 @@ impl Pointer {
         };
         Some(Self {
             source,
-            #[cfg(not(target_os = "macos"))]
-            scale: window.scale_factor(),
+            scale: match cfg!(target_os = "macos") {
+                true => 1.,
+                false => window.scale_factor(),
+            },
         })
     }
 
@@ -74,15 +75,12 @@ impl Pointer {
 
     /// Where it is now, unless the platform won't say.
     pub fn at(&self) -> Option<Drag> {
-        let (x, y): (f64, f64) = match &self.source {
+        let (x, y) = match &self.source {
             #[cfg(target_os = "linux")]
             Source::X11(connection, window) => {
                 use x11rb::protocol::xproto::ConnectionExt;
                 let pointer = connection.query_pointer(*window).ok()?.reply().ok()?;
-                (
-                    f64::from(pointer.win_x) / self.scale,
-                    f64::from(pointer.win_y) / self.scale,
-                )
+                (f64::from(pointer.win_x), f64::from(pointer.win_y))
             }
             #[cfg(target_os = "macos")]
             Source::AppKit(view) => view.pointer()?,
@@ -99,13 +97,13 @@ impl Pointer {
                 {
                     return None;
                 }
-                (
-                    f64::from(point.x) / self.scale,
-                    f64::from(point.y) / self.scale,
-                )
+                (f64::from(point.x), f64::from(point.y))
             }
         };
-        Some(Drag::Moved { x, y })
+        Some(Drag::Moved {
+            x: x / self.scale,
+            y: y / self.scale,
+        })
     }
 }
 
