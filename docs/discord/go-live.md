@@ -35,7 +35,11 @@ frames carry their time, which the seek bar shows.
 `stream_worker` starts it with one job as a JSON line and reads its reports
 back. On Linux it starts `/proc/self/exe`, the running Yapfast, since Yapfast's path
 names a deleted file once a rebuild or update replaces it; elsewhere, the
-running Yapfast's path. Frames reach the UI through `frames`, a triple buffer in a memory-mapped
+running Yapfast's path. On macOS that path may name a newer build by then, so
+Yapfast hands the worker its build, the UUID the linker gave its executable,
+in `YAPFAST_STREAM_WORKER_BUILD`. A worker of another build refuses its job,
+and the call shows "Yapfast was updated while it was open. Quit and reopen
+it, then try again." Frames reach the UI through `frames`, a triple buffer in a memory-mapped
 file in the runtime directory. The file is unlinked once the worker opens it.
 Windows won't delete a mapped file, so there it's a temporary file that
 Windows deletes once both processes close it. macOS's temporary directory is

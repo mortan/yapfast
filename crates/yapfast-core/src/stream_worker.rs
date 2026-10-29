@@ -47,6 +47,8 @@ use crate::{
 
 /// The argument that starts Yapfast as a stream worker.
 pub const ARGUMENT: &str = "--stream-worker";
+/// The variable that tells a worker which [`build`] of Yapfast started it.
+const BUILD: &str = "YAPFAST_STREAM_WORKER_BUILD";
 
 /// The largest frame shared at 1080p. Discord's own client trials 1080p at
 /// 30 fps for accounts without Nitro, up to 5 Mbit/s (its "frontier tuning"
@@ -400,7 +402,9 @@ fn serve(mut input: Box<dyn BufRead + Send>, report: &mut dyn FnMut(Report)) {
     let mut line = String::new();
     let job = match input.read_line(&mut line) {
         Ok(_) => {
-            serde_json::from_str::<Job>(&line).map_err(|error| anyhow!("unknown job: {error}"))
+            same_build(std::env::var(BUILD).ok().as_deref(), build().as_deref()).and_then(|()| {
+                serde_json::from_str::<Job>(&line).map_err(|error| anyhow!("unknown job: {error}"))
+            })
         }
         Err(error) => Err(error.into()),
     };
@@ -1426,12 +1430,18 @@ impl Worker {
     }
 
     fn start(job: &Job) -> Result<(Self, mpsc::UnboundedReceiver<Report>)> {
-        // Tests run from their own binary, so they name Yapfast's.
-        let program = match std::env::var_os("YAPFAST_STREAM_WORKER") {
-            Some(program) => PathBuf::from(program),
-            None => running_yapfast()?,
+        let mut command = match std::env::var_os("YAPFAST_STREAM_WORKER") {
+            // Tests run from their own binary, so they name Yapfast's: another build.
+            Some(program) => Command::new(program),
+            None => {
+                let mut command = Command::new(running_yapfast()?);
+                if let Some(build) = build() {
+                    command.env(BUILD, build);
+                }
+                command
+            }
         };
-        let mut child = Command::new(program)
+        let mut child = command
             .arg(ARGUMENT)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -1489,6 +1499,69 @@ fn running_yapfast() -> Result<PathBuf> {
     std::env::current_exe().context("could not find Yapfast to start streaming")
 }
 
+/// This build of Yapfast, where the worker can start another: on macOS, the
+/// UUID the linker gave the running executable, which changes with its
+/// contents. Yapfast runs on from a deleted file once a rebuild or an update
+/// replaces it, while its path names the new one. On Linux the worker is the
+/// running file itself.
+#[cfg(target_os = "macos")]
+fn build() -> Option<String> {
+    /// `mach_header_64` from <mach-o/loader.h>.
+    #[repr(C)]
+    struct Header {
+        magic: u32,
+        cpu_type: i32,
+        cpu_subtype: i32,
+        file_type: u32,
+        commands: u32,
+        commands_size: u32,
+        flags: u32,
+        reserved: u32,
+    }
+    const MH_MAGIC_64: u32 = 0xfeed_facf;
+    const LC_UUID: u32 = 0x1b;
+    unsafe extern "C" {
+        fn _dyld_get_image_header(index: u32) -> *const Header;
+    }
+    // SAFETY: image 0 is the executable, mapped while the process runs.
+    let header = unsafe { _dyld_get_image_header(0).as_ref() }?;
+    if header.magic != MH_MAGIC_64 {
+        return None;
+    }
+    let mut command = std::ptr::from_ref(header).wrapping_add(1).cast::<u8>();
+    for _ in 0..header.commands {
+        // SAFETY: the header's load commands follow it, each starting with
+        // its kind and its size; LC_UUID's then holds the 16 bytes.
+        unsafe {
+            let [kind, size] = command.cast::<[u32; 2]>().read_unaligned();
+            if kind == LC_UUID {
+                let bytes = command.add(8).cast::<uuid::Bytes>().read_unaligned();
+                return Some(uuid::Uuid::from_bytes(bytes).to_string());
+            }
+            command = command.add(size as usize);
+        }
+    }
+    None
+}
+
+/// Elsewhere none: Linux starts the running file itself, and Windows won't
+/// overwrite a running executable's file, so its path names this build.
+#[cfg(not(target_os = "macos"))]
+fn build() -> Option<String> {
+    None
+}
+
+/// Refuses a job from a Yapfast of another build than the worker's, as
+/// [`build`] tells them, whose jobs and reports may differ from its own.
+fn same_build(starter: Option<&str>, own: Option<&str>) -> Result<()> {
+    if let (Some(starter), Some(own)) = (starter, own)
+        && starter != own
+    {
+        bail!("Yapfast was updated while it was open. Quit and reopen it, then try again.");
+    }
+    Ok(())
+}
+
 impl Drop for Worker {
     fn drop(&mut self) {
         if let Some(mut stdin) = self.stdin.take() {
@@ -1522,6 +1595,23 @@ mod tests {
             .status()
             .unwrap();
         assert!(status.success());
+    }
+
+    #[test]
+    fn refuses_a_job_from_another_build() {
+        assert!(same_build(Some("a"), Some("a")).is_ok());
+        assert!(same_build(None, Some("a")).is_ok(), "an unknown starter");
+        assert!(same_build(Some("a"), None).is_ok(), "an unknown build");
+        let refused = same_build(Some("a"), Some("b")).unwrap_err();
+        assert!(refused.to_string().contains("reopen"), "{refused}");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn knows_its_build() {
+        let build = build().expect("the linker's UUID");
+        assert_eq!(build.parse::<uuid::Uuid>().unwrap().to_string(), build);
+        assert_ne!(build, uuid::Uuid::nil().to_string());
     }
 
     #[test]
