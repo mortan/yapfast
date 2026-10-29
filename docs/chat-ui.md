@@ -169,9 +169,10 @@ errors make it taller than the minimum window. SSO and OAuth are still pending.
   them, and the message may be the files alone. A message carries up to ten
   files. Each must fit the conversation's limit, and a file that doesn't is
   refused with its size and the limit. On Wayland the clipboard is read
-  through the data-control protocol, so a picture keeps its copied bytes and a
-  GIF stays animated; elsewhere, macOS included, arboard reads it, and pixels
-  are saved as PNG.
+  through the data-control protocol, and on macOS the pasteboard is asked for
+  PNG, GIF, WebP and then JPEG, so a picture keeps its copied bytes and a GIF
+  stays animated; elsewhere, and on macOS for a picture copied only as TIFF,
+  arboard reads it, and pixels are saved as PNG.
   Pasted pictures are saved as `image.png` in a temporary folder removed when
   Yapfast closes. Text on the clipboard pastes as text. A right click in the
   composer opens Discord's menu for the field, without its spelling

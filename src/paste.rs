@@ -3,8 +3,10 @@
 //! which the composer pastes itself.
 //!
 //! On Wayland the clipboard is read through the data-control protocol, which
-//! hands over a picture's bytes as they were copied, so a GIF stays animated.
-//! Elsewhere arboard reads it; its pictures arrive as pixels and are saved as PNG.
+//! hands over a picture's bytes as they were copied, so a GIF stays animated,
+//! and on macOS the pasteboard does the same. Elsewhere arboard reads it, and
+//! on macOS what the pasteboard holds only as TIFF, which arboard takes; its
+//! pictures arrive as pixels and are saved as PNG.
 
 use std::path::PathBuf;
 
@@ -41,6 +43,10 @@ fn read_arboard() -> Clipboard {
     }
     if clipboard.get_text().is_ok() {
         return Clipboard::Other;
+    }
+    #[cfg(target_os = "macos")]
+    if let Some((bytes, extension)) = macos::picture() {
+        return Clipboard::Picture(bytes, extension);
     }
     let Ok(picture) = clipboard.get_image() else {
         return Clipboard::Other;
@@ -106,6 +112,34 @@ mod wayland {
             }
         }
         Ok(Clipboard::Other)
+    }
+}
+
+#[cfg(target_os = "macos")]
+mod macos {
+    use objc2::rc::autoreleasepool;
+    use objc2_app_kit::NSPasteboard;
+    use objc2_foundation::NSString;
+
+    /// Picture types Discord shows inline, best first, by their uniform type
+    /// identifiers, with their extensions.
+    const PICTURES: [(&str, &str); 4] = [
+        ("public.png", "png"),
+        ("com.compuserve.gif", "gif"),
+        ("org.webmproject.webp", "webp"),
+        ("public.jpeg", "jpg"),
+    ];
+
+    /// The best of [`PICTURES`] on the pasteboard, as it was copied.
+    pub fn picture() -> Option<(Vec<u8>, &'static str)> {
+        // Off the main thread, so the pasteboard's autoreleased objects go here.
+        autoreleasepool(|_| {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            PICTURES.into_iter().find_map(|(kind, extension)| {
+                let data = pasteboard.dataForType(&NSString::from_str(kind))?;
+                Some((data.to_vec(), extension))
+            })
+        })
     }
 }
 
