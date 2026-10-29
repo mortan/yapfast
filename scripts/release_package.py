@@ -84,22 +84,34 @@ def newest_input(dep_info):
     return newest
 
 
-def check_executable(executable, flavour, build_script):
-    """Stops unless executable is a release build of flavour from the current
-    source, built as build_script builds it."""
+def check_executable(executable, flavour, build_command):
+    """Stops unless executable is a build of flavour from the current source,
+    built as build_command, which names the flavour, builds it."""
     if not executable.is_file():
-        raise SystemExit(f"There's no {executable}; run {build_script} first")
+        raise SystemExit(f"There's no {executable}; run {build_command}")
     # Cargo writes the dep-info beside the executable it builds.
     dep_info = executable.with_suffix(".d")
-    if not dep_info.is_file() or executable.stat().st_mtime < newest_input(dep_info):
-        raise SystemExit(f"{executable} predates its source; run {build_script} first")
+    if not dep_info.is_file():
+        raise SystemExit(f"There's no {dep_info}, which Cargo writes beside the executable; run {build_command}")
+    if executable.stat().st_mtime < newest_input(dep_info):
+        raise SystemExit(f"{executable} predates its source; run {build_command}")
     contents = executable.read_bytes()
     if names_home(contents):
-        raise SystemExit(f"{executable} names {Path.home()}; build it with {build_script}")
+        raise SystemExit(f"{executable} names {Path.home()}; build it with {build_command}")
     # Both flavours build to the same path; the Matrix SDK's source paths
     # tell which one is there.
     if (b"/matrix-rust-sdk-" in contents) != (flavour == "full"):
-        raise SystemExit(f"{executable} isn't the {flavour} flavour; run {build_script} {flavour}")
+        raise SystemExit(f"{executable} isn't the {flavour} flavour; run {build_command}")
+
+
+def skia_source_pin():
+    """The URL and SHA-256 of the Skia source archive nix/flake.nix pins, the
+    revision the prebuilt Skia archives are built from."""
+    skia = re.search(r'windowsSkiaSourceArchive = pkgs\.fetchurl \{\s*url = "([^"]+)";\s*sha256 = "([0-9a-f]{64})";',
+                     (ROOT / "nix/flake.nix").read_text())
+    if not skia:
+        raise SystemExit("nix/flake.nix no longer pins Skia's source as scripts/release_package.py reads it")
+    return skia.groups()
 
 
 def cargo_metadata(target, features):

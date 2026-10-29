@@ -19,7 +19,7 @@ import tempfile
 
 from release_package import (FLAVOURS, ROOT, SKIA_VERSION, UI_FRAMEWORK, build_hashes, build_identity, cargo_metadata,
                              check_executable, dependency_notices, digest, first_steps, license_file,
-                             local_skia_archive, source_notice, source_snapshot)
+                             local_skia_archive, skia_source_pin, source_notice, source_snapshot)
 
 TARGET = "aarch64-apple-darwin"
 CACHE = Path.home() / "Library/Caches/yapfast-build"
@@ -77,19 +77,16 @@ def skia_source():
     """Skia's source with the third-party code the macOS archive holds, the
     revisions nix/flake.nix pins, for their notices: the prebuilt archive
     carries only Skia's own license. Downloaded once into CACHE, where only the
-    notices stay; its presence means it's complete. Returns it with the URL
-    and SHA-256 of Skia's own archive."""
+    notices stay; its presence means it's complete."""
+    url, sha256 = skia_source_pin()
     flake = (ROOT / "nix/flake.nix").read_text()
-    skia = re.search(r'windowsSkiaSourceArchive = pkgs\.fetchurl \{\s*url = "([^"]+)";\s*sha256 = "([0-9a-f]{64})";',
-                     flake)
-    pins = {name: (url, sri) for name, url, sri in
+    pins = {name: (dependency_url, sri) for name, dependency_url, sri in
             re.findall(r'\(skiaDependency "([^"]+)" "([^"]+)" "(sha256-[^"]+)"\)', flake)}
-    if not skia or not all(name in pins for name in SKIA_DEPENDENCIES):
-        raise SystemExit("nix/flake.nix no longer pins Skia's source as scripts/package-macos.py reads it")
-    url, sha256 = skia.groups()
+    if not all(name in pins for name in SKIA_DEPENDENCIES):
+        raise SystemExit("nix/flake.nix no longer pins Skia's dependencies as scripts/package-macos.py reads them")
     source = CACHE / f"skia-source-{url.rsplit('/', 1)[1][:8]}"
     if source.is_dir():
-        return source, url, sha256
+        return source
     CACHE.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="skia-source.", dir=CACHE) as temporary:
         temporary = Path(temporary)
@@ -104,17 +101,17 @@ def skia_source():
         archive.unlink()
         [tree] = unpacked.iterdir()
         for name in SKIA_DEPENDENCIES:
-            url, sri = pins[name]
-            print(f"Downloading {name}: {url}")
+            dependency_url, sri = pins[name]
+            print(f"Downloading {name}: {dependency_url}")
             archive = temporary / f"{name}.tar.gz"
-            fetch(url, archive)
+            fetch(dependency_url, archive)
             destination = tree / "third_party/externals" / name
             destination.mkdir(parents=True)
             with tarfile.open(archive) as stream:
                 stream.extractall(destination, filter="data")
             archive.unlink()
             if nar_hash(destination) != sri:
-                raise SystemExit(f"{url} doesn't match the hash nix/flake.nix pins")
+                raise SystemExit(f"{dependency_url} doesn't match the hash nix/flake.nix pins")
         # Only the notices stay: 350 MiB of source, 3 of them.
         for path in sorted(tree.rglob("*"), reverse=True):
             if path.is_symlink() or (path.is_file() and not license_file(path)):
@@ -122,7 +119,7 @@ def skia_source():
             elif path.is_dir() and not any(path.iterdir()):
                 path.rmdir()
         tree.rename(source)
-    return source, url, sha256
+    return source
 
 
 def webrtc_pin():
@@ -197,7 +194,8 @@ def main():
     args = parser.parse_args()
     flavour = FLAVOURS[args.flavour]
     executable = (args.executable or ROOT / "target" / TARGET / args.profile / "yapfast").resolve()
-    check_executable(executable, args.flavour, "scripts/build-macos")
+    dev = "" if args.profile == "release" else "-dev"
+    check_executable(executable, args.flavour, f"scripts/build-macos {args.flavour}" + (" --dev" if dev else ""))
     archs = subprocess.check_output(["lipo", "-archs", str(executable)], text=True, timeout=30).split()
     if archs != ["arm64"]:
         raise SystemExit(f"Expected an arm64 executable, not {' '.join(archs)}")
@@ -205,14 +203,14 @@ def main():
     skia_archive = local_skia_archive(os.environ["SKIA_BINARIES_URL"])
     # nix/prepare-skia-native.py's record of the prebuilt archive it prepared.
     skia_binaries = json.loads((skia_archive.parent / "yapfast-skia-native.json").read_text())
-    skia, skia_source_url, skia_source_sha256 = skia_source()
+    skia = skia_source()
+    skia_source_url, skia_source_sha256 = skia_source_pin()
     webrtc_tag, webrtc_sha256 = webrtc_pin()
     minimum_system = os.environ["MACOSX_DEPLOYMENT_TARGET"]
     identity = os.environ.get("YAPFAST_CODESIGN_IDENTITY") or ("Yapfast Dev" if SIGNING_KEYCHAIN.exists() else "-")
 
     # A dev package, from an incremental build, gets a name and folder of its
     # own, so that it never takes a release's place.
-    dev = "" if args.profile == "release" else "-dev"
     releases = args.output / "macos" / f"{args.flavour}{dev}"
     releases.mkdir(parents=True, exist_ok=True)
     base = f"Yapfast-{version}{flavour['suffix']}{dev}"

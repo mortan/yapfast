@@ -15,7 +15,7 @@ import tempfile
 
 from release_package import (FLAVOURS, ROOT, SKIA_VERSION, UI_FRAMEWORK, build_hashes, build_identity, cargo_metadata,
                              check_executable, dependency_notices, digest, first_steps, local_skia_archive,
-                             source_notice, source_snapshot, zip_directory)
+                             skia_source_pin, source_notice, source_snapshot, zip_directory)
 
 TARGET = "x86_64-pc-windows-msvc"
 # Inno Setup's compiler, run under Wine; installed once into its own prefix.
@@ -95,6 +95,7 @@ def main():
     flavour = FLAVOURS[args.flavour]
     output = args.output or ROOT / "target/dist" / args.flavour
     executable = args.exe.resolve()
+    check_executable(executable, args.flavour, f"scripts/build-windows {args.flavour}")
     with executable.open("rb") as stream:
         header = stream.read(64)
         if header[:2] != b"MZ":
@@ -103,7 +104,6 @@ def main():
         pe = stream.read(6)
         if pe[:4] != b"PE\0\0" or struct.unpack_from("<H", pe, 4)[0] != 0x8664:
             raise SystemExit("Expected an AMD64 Windows PE executable")
-    check_executable(executable, args.flavour, "scripts/build-windows")
     # Only the packages this flavour's features build.
     metadata, version = cargo_metadata(TARGET, flavour["features"])
     output.mkdir(parents=True, exist_ok=True)
@@ -164,6 +164,7 @@ def main():
                                           Path(os.environ["YAPFAST_SKIA_WINDOWS_SOURCE"]),
                                           Path(os.environ["LK_CUSTOM_WEBRTC"]))
         (package / "THIRD-PARTY.json").write_text(json.dumps(dependencies, indent=2) + "\n", encoding="utf-8")
+        skia_source_url, skia_source_sha256 = skia_source_pin()
         build = {
             **build_identity(version, args.flavour, TARGET, flavour["features"]),
             "rustc": subprocess.check_output(["rustc", "--version"], text=True, timeout=10).strip(),
@@ -172,8 +173,8 @@ def main():
             "renderer_default": "skia-software",
             "renderer_gpu": "skia-direct3d, falling back to skia-software",
             "skia_version": SKIA_VERSION,
-            "skia_source_revision": "61e7ca4e99062cdd0ab69445d5963fb3365778f6",
-            "skia_source_archive_sha256": "8401d0de878582a03abc1029bb62330aea58cda89904ae6ab187302e6d48ba5d",
+            "skia_source_revision": skia_source_url.rsplit("/", 1)[1],
+            "skia_source_archive_sha256": skia_source_sha256,
             "skia_runtime": "MT_StaticRelease",
             **build_hashes(skia_archive, executable, source_path),
             "webrtc_tag": "webrtc-51ef663",
