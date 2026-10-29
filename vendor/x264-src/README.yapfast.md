@@ -14,12 +14,14 @@ compiles the C files with the compiler `cc` picks (clang, or clang-cl for
 Windows), and assembles the x86-64 assembly with nasm (`$NASM`, or `nasm` on
 the PATH). On Apple silicon the same compiler assembles the Arm (NEON)
 assembly, with `PREFIX` and `PIC` as configure sets them for macOS. On other
-processors it builds the plain C code, without assembly. Three settings
+processors it builds the plain C code, without assembly. Four settings
 differ from configure's: the stack alignment is 16 bytes on every compiler,
 which x264's assembly realigns for; transparent huge pages stay off, which
-would round x264's large buffers up to 2 MiB pages; and the SVE assembly
-isn't built, which x264 would use on macOS only when the compiler targets
-SVE, as no Mac's processor has it.
+would round x264's large buffers up to 2 MiB pages; the SVE assembly isn't
+built, which x264 would use on macOS only when the compiler targets SVE, as
+no Mac's processor has it; and the atomic add (`HAVE_SYNC_FETCH_AND_ADD`) is
+on for every GCC-style compiler, clang on macOS too, where configure's test
+for it fails.
 
 To move to a newer x264, copy the same folders from its source, update the
 file lists in `build.rs` from its Makefile (`make -n lib-static` after

@@ -254,7 +254,9 @@ impl Target {
     }
 
     /// config.h as configure writes it. Transparent huge pages stay off:
-    /// x264 would round its large buffers up to 2 MiB pages for them.
+    /// x264 would round its large buffers up to 2 MiB pages for them. The
+    /// atomic add is on for every GCC-style compiler, though configure's test
+    /// for it fails on macOS, where clang has it too.
     fn config_h(&self) -> String {
         let linux = self.os == "linux";
         let windows = self.os == "windows";
@@ -278,7 +280,7 @@ impl Target {
             ("HAVE_SYNC_FETCH_AND_ADD", u8::from(gnu)),
             ("HAVE_LOG2F", 1),
             ("HAVE_STRTOK_R", u8::from(!windows)),
-            ("HAVE_CLOCK_GETTIME", u8::from(linux)),
+            ("HAVE_CLOCK_GETTIME", u8::from(linux || macos)),
             ("HAVE_GETAUXVAL", u8::from(linux)),
             ("HAVE_SYSCONF", u8::from(!windows)),
             ("HAVE_MMAP", u8::from(!windows)),
@@ -325,7 +327,7 @@ impl Target {
         }
         config.push_str("#define STACK_ALIGNMENT 16\n");
         config.push_str("#define CHROMA_FORMAT CHROMA_420\n");
-        if linux {
+        if linux || macos {
             config.push_str("#define fseek fseeko\n#define ftell ftello\n");
         }
         if self.msvc && self.x86_64 {
