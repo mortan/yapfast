@@ -79,7 +79,8 @@ repository, so `pacman -Syu` doesn't update it.
 ## macOS app
 
 `scripts/build-macos [discord|full]` makes `target/dist/Yapfast.app` for
-Apple silicon, and beside it in `target/dist/macos` the app's ZIP,
+Apple silicon, and, in a folder per flavour as on Windows,
+`target/dist/macos/discord` or `target/dist/macos/full`, the app's ZIP,
 `Yapfast-VERSION-macos-arm64.zip` (`-full-preview` before `-macos` for the
 full flavour), the source snapshot and `SHA256SUMS.txt`. It runs in
 `scripts/macos-env`, sources `scripts/release-env aarch64-apple-darwin`, so
@@ -90,13 +91,18 @@ what ships, not build scripts and proc macros (`Cargo.toml`). A cold build
 takes about 7 minutes on an M4 Pro; packing takes seconds. For trying the
 app while working on it, `--dev` after the flavour builds the measure
 profile instead, stripped: optimized as release, but incremental, so the app
-is ready 10–20 s after a small Rust edit. Its ZIP isn't for release.
+is ready 10–20 s after a small Rust edit. Its package isn't for release, and
+can't pass for one: it goes to `target/dist/macos/FLAVOUR-dev`, with `-dev`
+in its file names, and its `BUILD.json` names the `measure` profile.
 
-`scripts/package-macos.py` lays the bundle out as macOS expects it:
-`Contents/Info.plist`, from `packaging/macos/Info.plist` with the version from
-`Cargo.toml` (without a nightly's suffix, as the plist's versions are
-numbers only); `Contents/MacOS/yapfast`; and `Contents/Resources` with the
-icon, the license, `SOURCE.txt`, `BUILD.json`, `THIRD-PARTY.json` and the
+`scripts/package-macos.py` refuses an executable older than its inputs,
+`Cargo.toml`, `Cargo.lock` and the files Cargo's dep-info beside it names
+(dotfiles in a watched folder aside), as `scripts/package-windows.py` does.
+It lays the bundle out as macOS expects it: `Contents/Info.plist`, from
+`packaging/macos/Info.plist` with the version from `Cargo.toml` (without a
+nightly's suffix, as the plist's versions are numbers only);
+`Contents/MacOS/yapfast`; and `Contents/Resources` with the icon, the
+license, `SOURCE.txt`, `BUILD.json`, `THIRD-PARTY.json` and the
 dependencies' licenses and notices, through `scripts/release_package.py` as
 on Linux and Windows. rust-skia's prebuilt macOS Skia carries only Skia's own
 license, so the notices of the code linked into it, expat, libjpeg-turbo,

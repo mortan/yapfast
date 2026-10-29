@@ -3,7 +3,7 @@
 the dependencies' licenses and notices, signed, and zipped for the release
 beside the source snapshot.
 
-scripts/build-macos runs it in scripts/macos-env, after the release build."""
+scripts/build-macos runs it in scripts/macos-env, after the build."""
 import argparse
 import base64
 import hashlib
@@ -140,14 +140,17 @@ def sign(app, identity):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--executable", type=Path, default=ROOT / "target" / TARGET / "release/yapfast")
     parser.add_argument("--flavour", choices=FLAVOURS, default="discord",
                         help="the features the executable was built with (default: discord)")
+    parser.add_argument("--profile", default="release",
+                        help="the Cargo profile it was built with; any but release makes a dev package")
+    parser.add_argument("--executable", type=Path, help="default: target/aarch64-apple-darwin/PROFILE/yapfast")
     parser.add_argument("--output", type=Path, default=ROOT / "target/dist",
-                        help="where Yapfast.app goes; its ZIP goes to OUTPUT/macos (default: target/dist)")
+                        help="where Yapfast.app goes; its ZIP goes to OUTPUT/macos/FLAVOUR, or FLAVOUR-dev "
+                             "(default: target/dist)")
     args = parser.parse_args()
     flavour = FLAVOURS[args.flavour]
-    executable = args.executable.resolve()
+    executable = (args.executable or ROOT / "target" / TARGET / args.profile / "yapfast").resolve()
     check_executable(executable, args.flavour, "scripts/build-macos")
     archs = subprocess.check_output(["lipo", "-archs", str(executable)], text=True, timeout=30).split()
     if archs != ["arm64"]:
@@ -157,9 +160,12 @@ def main():
     skia = skia_source()
     identity = os.environ.get("YAPFAST_CODESIGN_IDENTITY") or ("Yapfast Dev" if SIGNING_KEYCHAIN.exists() else "-")
 
-    releases = args.output / "macos"
+    # A dev package, from an incremental build, gets a name and folder of its
+    # own, so that it never takes a release's place.
+    dev = "" if args.profile == "release" else "-dev"
+    releases = args.output / "macos" / f"{args.flavour}{dev}"
     releases.mkdir(parents=True, exist_ok=True)
-    base = f"Yapfast-{version}{flavour['suffix']}"
+    base = f"Yapfast-{version}{flavour['suffix']}{dev}"
     archive_path = releases / f"{base}-macos-arm64.zip"
     source_path = releases / f"{base}-source.zip"
     app_path = args.output / "Yapfast.app"
@@ -184,6 +190,7 @@ def main():
         (resources / "THIRD-PARTY.json").write_text(json.dumps(dependencies, indent=2) + "\n", encoding="utf-8")
         build = {
             **build_identity(version, args.flavour, TARGET, flavour["features"]),
+            "cargo_profile": args.profile,
             "rustc": subprocess.check_output(["rustc", "--version"], text=True, timeout=10).strip(),
             "macos_sdk": subprocess.check_output(["xcrun", "--show-sdk-version"], text=True, timeout=10).strip(),
             "macos_deployment_target": os.environ["MACOSX_DEPLOYMENT_TARGET"],
