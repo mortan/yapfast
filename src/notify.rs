@@ -326,8 +326,18 @@ mod macos {
 
     struct Request {
         request: Retained<UNNotificationRequest>,
-        /// The author's picture's file, until the framework takes it.
-        picture: Option<PathBuf>,
+        /// The author's picture, until the framework takes it.
+        picture: Option<PictureFile>,
+    }
+
+    /// A picture's file for the framework, which moves it into its own store
+    /// as it adds the notification; removed when dropped, if it's still here.
+    struct PictureFile(PathBuf);
+
+    impl Drop for PictureFile {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
     }
 
     // SAFETY: a notification request is immutable, and the framework passes
@@ -377,13 +387,7 @@ mod macos {
             let mut permission = lock(&self.permission);
             match &mut *permission {
                 Permission::Asking(waiting) => {
-                    waiting.retain(|waiting| {
-                        let replaced = waiting.request.identifier().isEqualToString(&room);
-                        if replaced {
-                            forget(waiting.picture.as_ref());
-                        }
-                        !replaced
-                    });
+                    waiting.retain(|waiting| !waiting.request.identifier().isEqualToString(&room));
                     waiting.push(request);
                 }
                 Permission::Unasked => {
@@ -427,11 +431,9 @@ mod macos {
                         }
                     }
                 };
-                for request in requests {
-                    if allowed {
+                if allowed {
+                    for request in requests {
                         add(&center, request);
-                    } else {
-                        forget(request.picture.as_ref());
                     }
                 }
             });
@@ -446,13 +448,14 @@ mod macos {
     fn add(center: &UNUserNotificationCenter, request: Request) {
         let picture = request.picture;
         let added = RcBlock::new(move |error: *mut NSError| {
+            // The picture's file goes with the block, which the framework
+            // lets go of once it has called it.
+            let _ = &picture;
             // SAFETY: the framework passes an error or null.
             if let Some(error) = unsafe { error.as_ref() } {
                 let error = error.localizedDescription().to_string();
                 tracing::warn!(%error, "could not show a notification");
             }
-            // The framework moved it into its own store if it took it.
-            forget(picture.as_ref());
         });
         center.addNotificationRequest_withCompletionHandler(&request.request, Some(&added));
     }
@@ -464,19 +467,19 @@ mod macos {
     }
 
     /// The author's picture, beside the text. The framework takes it as a file.
-    fn attach(content: &UNMutableNotificationContent, picture: &Picture) -> Option<PathBuf> {
+    fn attach(content: &UNMutableNotificationContent, picture: &Picture) -> Option<PictureFile> {
         static NEXT: AtomicU32 = AtomicU32::new(0);
         if u64::try_from(picture.rgba.len()).ok()?
             != u64::from(picture.width) * u64::from(picture.height) * 4
         {
             return None;
         }
-        let path = std::env::temp_dir().join(format!(
+        let file = PictureFile(std::env::temp_dir().join(format!(
             "yapfast-{}-{}.png",
             std::process::id(),
             NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let written = std::fs::File::create(&path)
+        )));
+        let written = std::fs::File::create(&file.0)
             .map_err(image::ImageError::IoError)
             .and_then(|file| {
                 image::codecs::png::PngEncoder::new(std::io::BufWriter::new(file)).write_image(
@@ -486,8 +489,9 @@ mod macos {
                     image::ExtendedColorType::Rgba8,
                 )
             });
-        let url = NSURL::fileURLWithPath(&NSString::from_str(path.to_str()?));
         let attachment = written.map_err(|error| error.to_string()).and_then(|()| {
+            let url = NSURL::from_file_path(&file.0)
+                .ok_or_else(|| "the temporary folder has no file URL".to_owned())?;
             // SAFETY: no options.
             unsafe {
                 UNNotificationAttachment::attachmentWithIdentifier_URL_options_error(
@@ -501,20 +505,12 @@ mod macos {
         match attachment {
             Ok(attachment) => {
                 content.setAttachments(&NSArray::from_retained_slice(&[attachment]));
-                Some(path)
+                Some(file)
             }
             Err(error) => {
                 tracing::debug!(%error, "a notification goes without its picture");
-                forget(Some(&path));
                 None
             }
-        }
-    }
-
-    /// Removes a picture's file, if the framework didn't take it.
-    fn forget(picture: Option<&PathBuf>) {
-        if let Some(picture) = picture {
-            let _ = std::fs::remove_file(picture);
         }
     }
 }
