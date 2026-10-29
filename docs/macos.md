@@ -20,7 +20,7 @@ scripts/macos-env cargo run --locked -- --preview   # the UI without an account
 scripts/macos-env cargo build --profile fast        # a development build
 scripts/build-macos                                 # target/dist/Yapfast.app, Discord only
 scripts/build-macos full                            # with Matrix
-scripts/build-macos discord --dev                   # the same app, rebuilt in seconds
+scripts/build-macos discord --dev                   # the same app, rebuilt in seconds; not for release
 open target/dist/Yapfast.app
 ```
 
@@ -104,18 +104,13 @@ anything that needs a permission from a terminal tab outside tmux, or open the
 app. An unbundled binary shows no notifications at all; the framework needs
 a bundle.
 
-macOS ties each permission to the app's signature. Without a signing
-identity, `scripts/build-macos` signs ad hoc, and an ad hoc signature changes
-with every build, so each new build asks again. To keep the permissions
-across builds, run `scripts/make-macos-signing-identity` once: it makes a
-self-signed certificate, "Yapfast Dev", in a keychain of its own
-(`~/Library/Keychains/yapfast-signing.keychain-db`, empty password, not in
-the search list), and from then on the build signs with it. A certificate
-in the login keychain works only from a shell in the login session, such as
-Terminal.app: from tmux or ssh, `codesign` fails with
-`errSecInternalComponent`. Another identity can be named in
-`YAPFAST_CODESIGN_IDENTITY`. `tccutil reset All io.github.yapfast.Yapfast` forgets every
-answer, so macOS asks again.
+macOS ties each permission to the app's signature. An ad hoc signature
+changes with every build, so each new build asks again; to keep the
+permissions across builds, run `scripts/make-macos-signing-identity` once,
+and the build signs with its stable identity from then on
+([signing](packaging.md#macos-app)).
+`tccutil reset All io.github.yapfast.Yapfast` forgets every answer, so macOS
+asks again.
 
 ## Keychain prompts
 
@@ -187,6 +182,6 @@ for it.
   sign-in](tray.md#starting-at-sign-in)).
 - Window capture goes through `CGWindowListCreateImage`, which Apple has
   deprecated in favour of ScreenCaptureKit.
-- The app is signed ad hoc and not notarized, so a copy downloaded from
-  elsewhere is stopped by Gatekeeper until allowed
+- The app isn't notarized, whatever it's signed with, so a copy downloaded
+  from elsewhere is stopped by Gatekeeper until allowed
   ([packaging](packaging.md#macos-app)).

@@ -122,20 +122,25 @@ and carries the sentences macOS shows when Yapfast first asks for the
 microphone, the camera and other apps' sound (Go Live's, a Core Audio process
 tap). Screen recording, notifications and input monitoring take no sentence.
 Permissions belong to the app that asks: started from the `.app`, Yapfast
-asks for them itself; started from a terminal, macOS asks for the terminal.
+asks for them itself; started from a terminal, macOS asks for the terminal
+([permissions](macos.md#permissions)).
 
 Without an identity, the script signs the bundle ad hoc (`codesign --sign -`),
 which Apple silicon requires of every program, without the hardened runtime,
 which only notarization needs, so no entitlements either. macOS ties
 permissions and Keychain access to the signature, and an ad hoc one changes
-with every build, so each build asks again. To keep them, the script signs
-with "Yapfast Dev" once `scripts/make-macos-signing-identity` has made it, a
-self-signed certificate in a keychain of its own that the script unlocks, or
-with the identity named in `YAPFAST_CODESIGN_IDENTITY`. Neither is notarized,
-so Gatekeeper stops the downloaded app until it's allowed in System Settings ›
-Privacy & Security, or its quarantine is removed (`xattr -dr
-com.apple.quarantine Yapfast.app`). `ditto -c -k --keepParent` zips the app's
-folder as Finder would.
+with every build, so each build asks again. To keep them, run
+`scripts/make-macos-signing-identity` once: it makes "Yapfast Dev", a
+self-signed certificate in a keychain of its own
+(`~/Library/Keychains/yapfast-signing.keychain-db`, empty password, not in
+the search list), which the script unlocks and signs with from then on. A
+certificate in the login keychain would work only from a shell in the login
+session, such as Terminal.app: from tmux or ssh, `codesign` fails with
+`errSecInternalComponent`. Another identity can be named in
+`YAPFAST_CODESIGN_IDENTITY`. None is notarized, so Gatekeeper stops the
+downloaded app until it's allowed in System Settings › Privacy & Security, or
+its quarantine is removed (`xattr -dr com.apple.quarantine Yapfast.app`).
+`ditto -c -k --keepParent` zips the app's folder as Finder would.
 
 Opened from Finder or the Dock, Yapfast's output goes to `/dev/null`, so it
 writes its log to `~/Library/Logs/Yapfast/yapfast.log` instead, where Console
