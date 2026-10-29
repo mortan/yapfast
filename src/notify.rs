@@ -247,7 +247,7 @@ mod macos {
         rc::Retained,
         runtime::{Bool, NSObject, NSObjectProtocol, ProtocolObject},
     };
-    use objc2_foundation::{NSArray, NSBundle, NSError, NSString, NSURL, ns_string};
+    use objc2_foundation::{NSArray, NSError, NSString, NSURL, ns_string};
     use objc2_user_notifications::{
         UNAuthorizationOptions, UNMutableNotificationContent, UNNotification,
         UNNotificationAttachment, UNNotificationDefaultActionIdentifier,
@@ -340,7 +340,7 @@ mod macos {
         /// Asks for permission only with the first notification.
         pub fn start(opened: fn(String)) -> Option<Self> {
             // The framework raises an exception for a process without a bundle.
-            if NSBundle::mainBundle().bundleIdentifier().is_none() {
+            if !crate::icon::bundled() {
                 tracing::info!("not started as Yapfast.app; no desktop notifications");
                 return None;
             }
