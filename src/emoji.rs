@@ -6,10 +6,11 @@
 //! installed emoji font under its own family name and uses that one: a bitmap
 //! font if there is one, a COLR font otherwise.
 //!
-//! On Windows, text falls back to fonts by script, and emoji, most symbols and
-//! the styled letters of Unicode's mathematical alphabets that names use, such
-//! as 𝓯𝓪𝓷𝓬𝔂, are all of the "Common" script, which no font is picked for. So
-//! Yapfast puts the fonts Windows ships for them in the fallback itself.
+//! On Windows and macOS, text falls back to fonts by script, and emoji, most
+//! symbols and the styled letters of Unicode's mathematical alphabets that
+//! names use, such as 𝓯𝓪𝓷𝓬𝔂, are all of the "Common" script, which no font is
+//! picked for. So Yapfast puts the fonts the system ships for them in the
+//! fallback itself.
 
 use std::sync::{Arc, OnceLock};
 
@@ -33,6 +34,7 @@ pub fn family() -> &'static str {
             prefer_families(&mut shared_collection(), &WINDOWS_FALLBACK);
             "Segoe UI Emoji"
         } else if cfg!(target_os = "macos") {
+            prefer_families(&mut shared_collection(), &MACOS_FALLBACK);
             "Apple Color Emoji"
         } else if register_color_font() {
             REGISTERED
@@ -324,6 +326,17 @@ const WINDOWS_FALLBACK: [&str; 5] = [
     "Segoe UI Symbol",
     "Cambria Math",
     "Segoe UI Historic",
+];
+
+/// The fonts every macOS from 14 on has for what Helvetica, its usual
+/// fallback, lacks, in Windows' order: color emoji, Helvetica itself, symbols
+/// and arrows, and the mathematical alphabets, which only STIX Two Math has
+/// in full.
+const MACOS_FALLBACK: [&str; 4] = [
+    "Apple Color Emoji",
+    "Helvetica",
+    "Apple Symbols",
+    "STIX Two Math",
 ];
 
 /// Put the installed ones of `names` first, in their order, in the generic
@@ -683,5 +696,18 @@ mod tests {
             order(&mut collection, fontique::GenericFamily::SystemUi),
             [emoji, symbols]
         );
+    }
+
+    /// Each fallback font is one macOS installs, under the name it's asked by.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_has_its_fallback_fonts() {
+        let mut collection = fontique::Collection::new(fontique::CollectionOptions {
+            shared: false,
+            system_fonts: true,
+        });
+        for name in MACOS_FALLBACK {
+            assert!(collection.family_by_name(name).is_some(), "{name}");
+        }
     }
 }

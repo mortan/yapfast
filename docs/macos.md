@@ -78,7 +78,10 @@ Yapfast does on macOS what it does on Linux, apart from what's
   sessions) go to the login Keychain through the `keyring` crate, under the
   service `io.github.yapfast.Yapfast`; see [Keychain prompts](#keychain-prompts).
 - **Drawing.** Skia Software by default; "Render with the GPU" uses Skia
-  OpenGL ([dependencies](building.md#dependencies)).
+  OpenGL ([dependencies](building.md#dependencies)). Text falls back to
+  Apple Color Emoji, Helvetica, Apple Symbols and STIX Two Math for what
+  Yapfast's typeface lacks, so symbols and the styled letters names use,
+  such as 𝓯𝓪𝓷𝓬𝔂, show (`src/emoji.rs`).
 - **Keys.** Cmd stands in for Ctrl in Yapfast's shortcuts, zoom, copy and
   paste ([chat UI](chat-ui.md#layout-and-look)).
 - **Memory.** Closing the window gives the allocator's free pages back with
