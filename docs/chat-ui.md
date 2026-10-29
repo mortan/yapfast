@@ -173,8 +173,9 @@ errors make it taller than the minimum window. SSO and OAuth are still pending.
   PNG, GIF, WebP and then JPEG, so a picture keeps its copied bytes and a GIF
   stays animated; elsewhere, and on macOS for a picture copied only as TIFF,
   arboard reads it, and pixels are saved as PNG.
-  Pasted pictures are saved as `image.png` in a temporary folder removed when
-  Yapfast closes. Text on the clipboard pastes as text. A right click in the
+  Pasted pictures are saved as `image.png`, or as `image.gif`, `.webp` or
+  `.jpg` when Wayland or the macOS pasteboard gives that type, in a temporary
+  folder removed when Yapfast closes. Text on the clipboard pastes as text. A right click in the
   composer opens Discord's menu for the field, without its spelling
   suggestions: Cut and Copy while text is selected, Paste, which pastes as
   Ctrl+V (Cmd+V) does, and Select All, which Discord's lacks. A thread's composer
@@ -480,7 +481,7 @@ monochrome emoji, so emoji in message text draw in color too; symbols the UI
 typeface lacks that have an emoji form, such as ♥, then show as emoji. Linux
 uses the prebuilt Skia with Skia's own FreeType, which draws COLRv1, the only
 build Fedora installs (issue #32), as `skia_draws_colrv1_glyphs_in_colour`
-checks. Windows uses "Segoe UI Emoji".
+checks. Windows uses "Segoe UI Emoji", and macOS "Apple Color Emoji".
 
 On Windows, fontique falls back by script, with a sample of each script, and
 its sans-serif and UI lists are only Arial and Segoe UI. Emoji, most symbols
@@ -489,4 +490,8 @@ use, such as 𝓯𝓪𝓷𝓬𝔂, are all of the Common script, so they would s
 Yapfast puts Segoe UI Emoji, Segoe UI, Segoe UI Symbol, Cambria Math and Segoe
 UI Historic at the front of both lists (`emoji::WINDOWS_FALLBACK`). Wine draws
 no emoji from a bitmap font standing in for Segoe UI Emoji, so color emoji in
-message text need a check on real Windows.
+message text need a check on real Windows. macOS's CoreText fallback, through
+fontique, has the same gap for the Common script past Helvetica, so there
+Yapfast puts Apple Color Emoji, Helvetica, Apple Symbols and STIX Two Math,
+the only one with the mathematical alphabets in full, at the front of both
+lists (`emoji::MACOS_FALLBACK`).
