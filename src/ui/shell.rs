@@ -467,11 +467,12 @@ impl Adapter {
 }
 
 /// Gives back memory freed with the window. On Linux glibc keeps freed heap
-/// for reuse until trimmed. On Windows the heap is compacted, which releases
-/// its free blocks, and the working set emptied: Task Manager shows the
-/// private working set, which pages the window used would otherwise stay in.
+/// for reuse until trimmed, and macOS's allocator keeps freed pages until
+/// asked for them. On Windows the heap is compacted, which releases its free
+/// blocks, and the working set emptied: Task Manager shows the private
+/// working set, which pages the window used would otherwise stay in.
 pub(super) fn release_memory() {
-    trim();
+    yapfast_core::release_free_heap();
     #[cfg(windows)]
     {
         use windows_sys::Win32::System::{

@@ -759,7 +759,7 @@ fn control(path: PathBuf, shell: Rc<shell::Shell>) -> slint::Timer {
                         Ok(())
                     }
                     "trim" => {
-                        trim();
+                        yapfast_core::release_free_heap();
                         Ok(())
                     }
                     "stats" => {
@@ -852,12 +852,6 @@ fn control(path: PathBuf, shell: Rc<shell::Shell>) -> slint::Timer {
         },
     );
     timer
-}
-
-/// Return freed heap pages to the system, to separate memory still in use from
-/// memory the allocator keeps for reuse.
-fn trim() {
-    yapfast_core::release_free_heap();
 }
 
 /// Print the allocator's per-arena totals to standard error: memory held from
