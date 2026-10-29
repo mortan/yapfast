@@ -1,17 +1,13 @@
 /* Decoding Go Live video someone else streams: VP8 through libvpx and H264
- * through FFmpeg, both inside Yapfast's libwebrtc archive, or on macOS, whose
- * archive's FFmpeg has no H264 decoder, through VideoToolbox (vtdec.c).
- * Pictures come out as I420 planes that stay valid until the next call on
- * the decoder. */
+ * through FFmpeg, both inside Yapfast's libwebrtc archive. Pictures come out
+ * as I420 planes that stay valid until the next call on the decoder. On
+ * macOS, whose archive's FFmpeg has no H264 decoder, decode.rs gives H264 to
+ * vtdec.c instead. */
 #include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 
-#ifdef __APPLE__
-#include "vtdec.h"
-#else
 #include "libavcodec/avcodec.h"
-#endif
 #include "picture.h"
 #include "vpx/vp8dx.h"
 #include "vpx/vpx_decoder.h"
@@ -21,15 +17,11 @@ enum { YAPFAST_VP8 = 0, YAPFAST_H264 = 1 };
 struct yapfast_decoder {
   int codec;
   vpx_codec_ctx_t vpx;
-#ifdef __APPLE__
-  struct vtdec *vt;
-#else
   AVCodecContext *context;
   AVPacket *packet;
   AVFrame *frame;
   unsigned char *padded;
   size_t padded_size;
-#endif
 };
 
 void yapfast_decoder_free(struct yapfast_decoder *decoder) {
@@ -37,14 +29,10 @@ void yapfast_decoder_free(struct yapfast_decoder *decoder) {
   if (decoder->codec == YAPFAST_VP8) {
     vpx_codec_destroy(&decoder->vpx);
   } else {
-#ifdef __APPLE__
-    vtdec_free(decoder->vt);
-#else
     avcodec_free_context(&decoder->context);
     av_packet_free(&decoder->packet);
     av_frame_free(&decoder->frame);
     free(decoder->padded);
-#endif
   }
   free(decoder);
 }
@@ -65,15 +53,6 @@ struct yapfast_decoder *yapfast_decoder_new(int codec, unsigned threads) {
     free(decoder);
     return NULL;
   }
-#ifdef __APPLE__
-  /* Shown as soon as decoded, as FFmpeg's low delay does. */
-  decoder->vt = vtdec_new(VTDEC_H264, 0);
-  if (!decoder->vt) {
-    free(decoder);
-    return NULL;
-  }
-  return decoder;
-#else
   const AVCodec *h264 = avcodec_find_decoder(AV_CODEC_ID_H264);
   decoder->context = h264 ? avcodec_alloc_context3(h264) : NULL;
   decoder->packet = av_packet_alloc();
@@ -91,18 +70,13 @@ struct yapfast_decoder *yapfast_decoder_new(int codec, unsigned threads) {
     return NULL;
   }
   return decoder;
-#endif
 }
 
 /* Decodes one frame. Returns 1 with a picture, 0 when the decoder has none
  * yet, or a negative number when the frame couldn't be decoded. */
 int yapfast_decoder_decode(struct yapfast_decoder *decoder, const unsigned char *data,
                         size_t size, struct yapfast_picture *picture) {
-#ifdef __APPLE__
-  if (size > INT_MAX) return -1;
-#else
   if (size > INT_MAX - AV_INPUT_BUFFER_PADDING_SIZE) return -1;
-#endif
   if (decoder->codec == YAPFAST_VP8) {
     if (vpx_codec_decode(&decoder->vpx, data, (unsigned int)size, NULL, 0)) return -1;
     vpx_codec_iter_t iter = NULL;
@@ -120,15 +94,6 @@ int yapfast_decoder_decode(struct yapfast_decoder *decoder, const unsigned char 
     picture->v_stride = image->stride[VPX_PLANE_V];
     return 1;
   }
-#ifdef __APPLE__
-  int decoded = vtdec_decode(decoder->vt, data, size, 0, MAX_SIDE);
-  if (decoded < 0) return decoded;
-  struct vtdec_picture got;
-  decoded = vtdec_picture(decoder->vt, 0, &got);
-  if (decoded <= 0) return decoded;
-  *picture = got.planes;
-  return 1;
-#else
   /* FFmpeg's parsers may read a little past the end. */
   size_t needed = size + AV_INPUT_BUFFER_PADDING_SIZE;
   if (decoder->padded_size < needed) {
@@ -158,5 +123,4 @@ int yapfast_decoder_decode(struct yapfast_decoder *decoder, const unsigned char 
   picture->u_stride = frame->linesize[1];
   picture->v_stride = frame->linesize[2];
   return 1;
-#endif
 }

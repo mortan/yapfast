@@ -27,7 +27,7 @@ unsafe extern "C" {
     fn yapfast_decoder_free(decoder: *mut Raw);
 }
 
-#[cfg(hevcdec)]
+#[cfg(all(hevcdec, not(target_os = "macos")))]
 unsafe extern "C" {
     fn yapfast_hevc_new(threads: c_uint) -> *mut Raw;
     fn yapfast_hevc_decode(
@@ -37,6 +37,18 @@ unsafe extern "C" {
         picture: *mut RawPicture,
     ) -> c_int;
     fn yapfast_hevc_free(decoder: *mut Raw);
+}
+
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn vtdec_new(codec: c_int, reorder: c_int) -> *mut Raw;
+    fn yapfast_vtdec_decode(
+        decoder: *mut Raw,
+        data: *const c_uchar,
+        size: usize,
+        picture: *mut RawPicture,
+    ) -> c_int;
+    fn vtdec_free(decoder: *mut Raw);
 }
 
 type DecodeFn = unsafe extern "C" fn(*mut Raw, *const c_uchar, usize, *mut RawPicture) -> c_int;
@@ -85,12 +97,20 @@ impl Decoder {
                 yapfast_decoder_decode,
                 yapfast_decoder_free,
             ),
+            #[cfg(not(target_os = "macos"))]
             Codec::H264 => (
                 unsafe { yapfast_decoder_new(1, threads) },
                 yapfast_decoder_decode,
                 yapfast_decoder_free,
             ),
-            #[cfg(hevcdec)]
+            // VideoToolbox picks its threads, or the GPU's decoder, and
+            // gives each picture as soon as it's decoded, as FFmpeg's low
+            // delay does.
+            #[cfg(target_os = "macos")]
+            Codec::H264 => (unsafe { vtdec_new(0, 0) }, yapfast_vtdec_decode, vtdec_free),
+            #[cfg(target_os = "macos")]
+            Codec::H265 => (unsafe { vtdec_new(1, 0) }, yapfast_vtdec_decode, vtdec_free),
+            #[cfg(all(hevcdec, not(target_os = "macos")))]
             Codec::H265 => (
                 unsafe { yapfast_hevc_new(threads) },
                 yapfast_hevc_decode,

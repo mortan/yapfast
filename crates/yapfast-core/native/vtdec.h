@@ -1,5 +1,6 @@
 /* H264 and H265 decoded by VideoToolbox on macOS, where libwebrtc's FFmpeg
- * has neither decoder: shared by decode.c (Go Live) and video.c (files). */
+ * has neither decoder: for watched Go Live streams (decode.rs) and files
+ * (video.c). */
 #ifndef YAPFAST_VTDEC_H
 #define YAPFAST_VTDEC_H
 
@@ -40,5 +41,11 @@ int vtdec_decode(struct vtdec *decoder, const uint8_t *data, size_t size, int64_
 int vtdec_picture(struct vtdec *decoder, int drain, struct vtdec_picture *picture);
 /* Lets go of the pictures held back, as when seeking. */
 void vtdec_flush(struct vtdec *decoder);
+/* A watched stream's frame, with decode.c's interface: a decoder made
+ * without `reorder` takes a whole access unit and gives its picture. 1 with
+ * one, 0 when it has none yet, or a negative number when the frame couldn't
+ * be decoded. */
+int yapfast_vtdec_decode(struct vtdec *decoder, const unsigned char *data, size_t size,
+                         struct yapfast_picture *picture);
 
 #endif

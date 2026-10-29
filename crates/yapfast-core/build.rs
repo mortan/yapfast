@@ -70,10 +70,11 @@ fn main() {
     let mut codecs = cc::Build::new();
     // libwebrtc's macOS FFmpeg decodes neither H264 nor H265, and
     // ffmpeg-src builds no encoders there, so VideoToolbox decodes and
-    // encodes: decode.c's and video.c's H264, vtdec.c's H265 in place of
-    // hevc.c's, and vtenc.c in place of hwenc.c. Nor AAC, which AudioToolbox
-    // decodes for video.c, in aacdec.c. webrtc-sys links the frameworks
-    // already; they're named for these files' own calls.
+    // encodes: vtdec.c for watched streams in place of decode.c's H264 and
+    // hevc.c, and for video.c's H264, and vtenc.c in place of hwenc.c. Nor
+    // AAC, which AudioToolbox decodes for video.c, in aacdec.c. webrtc-sys
+    // links the frameworks already; they're named for these files' own
+    // calls.
     if target_os == "macos" {
         codecs
             .file("native/vtdec.c")

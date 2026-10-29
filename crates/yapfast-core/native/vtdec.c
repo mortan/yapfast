@@ -4,8 +4,7 @@
  * length-prefixed with an avcC record (files); either way they're rewritten
  * with 4-byte lengths and their parameter sets taken out, which re-create the
  * session when they change. Decoding is synchronous, and pictures leave as
- * I420 converted from VideoToolbox's NV12 into one reused buffer. Also gives
- * hevc.c's interface for watched H265 streams. */
+ * I420 converted from VideoToolbox's NV12 into one reused buffer. */
 #include "vtdec.h"
 
 #include <CoreFoundation/CoreFoundation.h>
@@ -568,22 +567,8 @@ int vtdec_picture(struct vtdec *decoder, int drain, struct vtdec_picture *pictur
   return result;
 }
 
-/* hevc.c's interface, for watched H265 streams. */
-
-struct vtdec *yapfast_hevc_new(unsigned threads) {
-  /* VideoToolbox picks its own threads, or the GPU's decoder. */
-  (void)threads;
-  return vtdec_new(VTDEC_HEVC, 0);
-}
-
-void yapfast_hevc_free(struct vtdec *decoder) {
-  vtdec_free(decoder);
-}
-
-/* Decodes one frame. Returns 1 with a picture, 0 when the decoder has none
- * yet, or a negative number when the frame couldn't be decoded. */
-int yapfast_hevc_decode(struct vtdec *decoder, const unsigned char *data, size_t size,
-                        struct yapfast_picture *picture) {
+int yapfast_vtdec_decode(struct vtdec *decoder, const unsigned char *data, size_t size,
+                         struct yapfast_picture *picture) {
   int decoded = vtdec_decode(decoder, data, size, 0, MAX_SIDE);
   if (decoded < 0) return decoded;
   struct vtdec_picture got;

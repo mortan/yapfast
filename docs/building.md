@@ -267,7 +267,8 @@ files named here are in `crates/yapfast-core/native/`.
 - LiveKit's libwebrtc archive, `$LK_CUSTOM_WEBRTC` in the development shell,
   holds libvpx, dav1d, libyuv and Chromium's FFmpeg, which has H264 and
   common audio codecs but no HEVC decoder; on macOS it has no H264 or AAC
-  decoder either. `decode.c` decodes watched VP8 and H264 streams with it.
+  decoder either. `decode.c` decodes watched VP8 and H264 streams with it,
+  only VP8 on macOS.
   `video.c` plays video files: libavformat demuxes, libavcodec decodes H264
   and the sound, libvpx VP8 and VP9, dav1d AV1, and libyuv converts to
   RGBA. It also decodes the soundboard's MP3
@@ -278,13 +279,13 @@ files named here are in `crates/yapfast-core/native/`.
 - `vendor/ffmpeg-src` holds only the GPU encoders, which `hwenc.c` drives,
   and the HEVC decoder for watched H265 streams, in `hevc.c`, on Linux and
   Windows.
-- On macOS, VideoToolbox decodes H264 for `decode.c` and `video.c`, and
-  watched H265 streams, in `vtdec.c`, which gives `hevc.c`'s interface. It
-  decodes H264 only in 8 bits and 4:2:0, so 10-bit, 4:2:2 and 4:4:4 H264
-  files don't play there. VideoToolbox's hardware encoder encodes Go Live's
-  H264 and H265 in `vtenc.c`, which gives `hwenc.c`'s interface.
-  AudioToolbox decodes video files' AAC sound, LC and HE-AAC v1 and v2, for
-  `video.c`, in `aacdec.c`.
+- On macOS, VideoToolbox decodes in `vtdec.c`: watched H264 and H265
+  streams, which `decode.rs` gives it in place of `decode.c`'s H264 and
+  `hevc.c`, and video files' H264 for `video.c`. It decodes H264 only in 8
+  bits and 4:2:0, so 10-bit, 4:2:2 and 4:4:4 H264 files don't play there.
+  VideoToolbox's hardware encoder encodes Go Live's H264 and H265 in
+  `vtenc.c`, which gives `hwenc.c`'s interface. AudioToolbox decodes video
+  files' AAC sound, LC and HE-AAC v1 and v2, for `video.c`, in `aacdec.c`.
 - `vendor/x264-src` encodes H264 on the CPU, in `h264.c`, for Go Live and
   the camera.
 
