@@ -122,10 +122,13 @@ Yapfast keeps its secrets in the login Keychain: for Discord the token
 key (`ID-store-key`). The build that saves an item may read it without
 asking. Another build, signed differently, makes macOS ask whether `yapfast`
 may use the item, once per item: so after a rebuild, expect two prompts as a
-linked Discord account starts. "Always Allow" adds that build to the item;
-"Deny" leaves the item as it is: Yapfast says it couldn't read it from the
-OS credential store, and macOS asks again at the next start. A stable
-signing identity, as above, stops these prompts too. Against the fake Discord
+linked Discord account starts. Yapfast reads the Discord token once a run,
+not each time the sign-in screen shows. "Always Allow" adds that build to
+the item; "Deny" leaves the item as it is: Yapfast says it couldn't read it
+from the OS credential store, on the sign-in screen of a build without
+Matrix rather than offering to link again, and macOS asks again on "Retry
+saved session" or at the next start. A stable signing identity, as above,
+stops these prompts too. Against the fake Discord
 (`YAPFAST_DISCORD_TEST_SERVER`) Yapfast doesn't touch the Keychain.
 
 ## Checks

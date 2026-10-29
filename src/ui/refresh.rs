@@ -325,8 +325,8 @@ impl Adapter {
                     .is_some_and(|room| Network::of(room) == Network::Discord),
         );
         window.set_online(state.online);
-        // Only the sign-in screen offers it, and finding out reads the OS
-        // credential store or the disk.
+        // Only the sign-in screen offers it, and finding out looks at the
+        // disk, or at what the OS credential store said when first read.
         if !workspace {
             window.set_restore_available(yapfast_core::chat::can_restore(&self.root));
         }

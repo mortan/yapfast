@@ -3871,15 +3871,16 @@ pub fn notification_text(markdown: &str) -> String {
 }
 
 /// Whether Yapfast can start without the sign-in screen: with a saved Matrix
-/// session, or always in a build without Matrix, where Discord uses the
-/// account linked on this device.
+/// session, or in a build without Matrix unless no Discord account is linked
+/// on this device. The OS credential store is read for that only the first
+/// time; one that couldn't be read restores too, which says why.
 pub fn can_restore(root: &std::path::Path) -> bool {
     #[cfg(feature = "matrix")]
     return root.join("active.json").exists();
     #[cfg(all(not(feature = "matrix"), feature = "discord"))]
     return {
         let _ = root;
-        yapfast_discord::token::load().is_ok()
+        !matches!(yapfast_discord::token::linked(), Ok(false))
     };
     #[cfg(not(any(feature = "matrix", feature = "discord")))]
     {
