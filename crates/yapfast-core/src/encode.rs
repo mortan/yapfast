@@ -14,8 +14,8 @@ use livekit::webrtc::{
 };
 use yapfast_discord::rtp::Codec;
 // FFmpeg's and x264's libraries, which native/hwenc.c and native/h264.c
-// call: linked only while named. macOS encodes on the GPU with VideoToolbox.
-#[cfg(all(hwenc, not(target_os = "macos")))]
+// call: linked only while named. On macOS ffmpeg-src builds nothing.
+#[cfg(hwenc)]
 use ffmpeg_src as _;
 use x264_src as _;
 
