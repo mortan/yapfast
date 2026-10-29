@@ -3932,17 +3932,18 @@ enum Wake {
 pub async fn run(
     root: PathBuf,
     start: Start,
-    mut commands: UnboundedReceiver<Command>,
+    commands: UnboundedReceiver<Command>,
     events: UnboundedSender<Event>,
 ) {
+    // Parameters drop after locals, in reverse order, which would end the
+    // events while commands were still taken. As a local, commands are
+    // refused first at every return.
+    let mut commands = commands;
     let remembered = root.join(voice::DEVICES);
     #[cfg(feature = "matrix")]
     let session = match crate::matrix_chat::open(root, start).await {
         Ok(session) => session,
         Err(error) => {
-            // Parameters drop in reverse order, which would end the events
-            // while commands were still taken; refuse commands first.
-            drop(commands);
             let _ = events.send(Event::Error(error.to_string()));
             return;
         }
