@@ -1,6 +1,7 @@
 /* Cameras on macOS through AVFoundation, with camera.cc's C interface:
  * yapfast_camera_list, yapfast_camera_open and yapfast_camera_close, plus
- * yapfast_camera_access for the Camera permission. A session films in NV12,
+ * yapfast_camera_access for the Camera permission, and
+ * yapfast_microphone_status for the Microphone one. A session films in NV12,
  * hands each frame over on a serial dispatch queue of its own, and libyuv
  * converts it into I420 planes this camera reuses for every frame, scaled
  * down as camera.cc scales a camera that can't film small enough. */
@@ -265,6 +266,16 @@ int yapfast_camera_access(yapfast_camera_answered answered, void *user) {
                              }];
     dispatch_semaphore_wait(answered, DISPATCH_TIME_FOREVER);
     return allowed ? 1 : 0;
+  }
+}
+
+/* The microphone's AVAuthorizationStatus, which audio_io reads to tell a
+ * refused microphone's silence from a quiet one: 0 when nobody has asked,
+ * 1 restricted by a policy, 2 refused, 3 allowed. Asks nothing. Here as the
+ * one AVFoundation file every macOS build compiles. */
+long yapfast_microphone_status(void) {
+  @autoreleasepool {
+    return (long)[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
   }
 }
 

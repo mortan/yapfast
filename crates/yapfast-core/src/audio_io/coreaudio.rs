@@ -20,8 +20,8 @@
 //!
 //! macOS hands a microphone it won't let Yapfast use over as silence, so
 //! [`microphone_denied`] asks AVFoundation whether it will, without asking
-//! the person. The frameworks are declared here rather than through the
-//! objc2 bindings: a dozen C functions and one Objective-C message don't
+//! the person, through `native/camera_mac.m`. The frameworks are declared
+//! here rather than through the objc2 bindings: a dozen C functions don't
 //! need a crate. Hearing the other applications for Go Live is [`tap`]'s.
 
 use std::{
@@ -283,25 +283,9 @@ mod sys {
         pub fn CFRelease(object: *const c_void);
     }
 
-    #[link(name = "AVFoundation", kind = "framework")]
+    // native/camera_mac.m.
     unsafe extern "C" {
-        pub static AVMediaTypeAudio: *const c_void;
-    }
-
-    #[link(name = "objc")]
-    unsafe extern "C" {
-        pub fn objc_getClass(name: *const c_char) -> *mut c_void;
-        pub fn sel_registerName(name: *const c_char) -> *mut c_void;
-        pub fn objc_autoreleasePoolPush() -> *mut c_void;
-        pub fn objc_autoreleasePoolPop(pool: *mut c_void);
-        /// `objc_msgSend` for a message that takes an object and returns
-        /// an `NSInteger`.
-        #[link_name = "objc_msgSend"]
-        pub fn send_for_integer(
-            receiver: *mut c_void,
-            selector: *mut c_void,
-            argument: *const c_void,
-        ) -> isize;
+        pub fn yapfast_microphone_status() -> std::ffi::c_long;
     }
 
     // libdispatch, part of libSystem.
@@ -502,21 +486,9 @@ pub fn endpoint(id: Option<&str>, output: bool) -> String {
 /// nothing.
 pub fn microphone_denied() -> bool {
     /// `AVAuthorizationStatusRestricted` and `AVAuthorizationStatusDenied`.
-    const REFUSED: [isize; 2] = [1, 2];
-    // SAFETY: a class method that takes a media type and returns an
-    // NSInteger, sent to the class if it's there, in a pool of its own for
-    // what AVFoundation autoreleases on a thread that has none.
-    unsafe {
-        let device = sys::objc_getClass(c"AVCaptureDevice".as_ptr());
-        if device.is_null() {
-            return false;
-        }
-        let selector = sys::sel_registerName(c"authorizationStatusForMediaType:".as_ptr());
-        let pool = sys::objc_autoreleasePoolPush();
-        let status = sys::send_for_integer(device, selector, sys::AVMediaTypeAudio);
-        sys::objc_autoreleasePoolPop(pool);
-        REFUSED.contains(&status)
-    }
+    const REFUSED: [std::ffi::c_long; 2] = [1, 2];
+    // SAFETY: takes nothing, and only reads the status.
+    REFUSED.contains(&unsafe { sys::yapfast_microphone_status() })
 }
 
 /// How Core Audio describes `format` at `rate`.
@@ -1318,12 +1290,7 @@ impl Input {
         fragment: Duration,
     ) -> Result<Self> {
         let device = device(microphone, false).context("this microphone is no longer connected")?;
-        if microphone_denied() {
-            tracing::warn!(
-                "macOS doesn't let Yapfast use the microphone, which hears silence: allow it \
-                 in System Settings › Privacy & Security › Microphone"
-            );
-        }
+        super::warn_if_microphone_denied();
         let mut unit = Unit::new(device, true)?;
         let nominal = property::<f64>(device, sys::NOMINAL_SAMPLE_RATE, sys::SCOPE_GLOBAL);
         // The unit converts samples and channels, but not the rate.
@@ -1419,10 +1386,13 @@ mod tests {
         assert!(device(Some(&u32::MAX.to_string()), true).is_err());
     }
 
-    /// AVFoundation answers through the runtime, here Denied for a
-    /// terminal refused the microphone.
+    /// AVFoundation answers with one of its four statuses, whatever this
+    /// terminal was allowed.
     #[test]
     fn asks_whether_the_microphone_is_refused() {
+        // SAFETY: takes nothing.
+        let status = unsafe { sys::yapfast_microphone_status() };
+        assert!((0..=3).contains(&status), "{status}");
         eprintln!("refused: {}", microphone_denied());
     }
 

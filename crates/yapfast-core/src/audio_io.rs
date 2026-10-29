@@ -62,6 +62,17 @@ pub fn microphone_denied() -> bool {
     false
 }
 
+/// Logs that the microphone a call opens will hear only silence, when the
+/// system refuses it to Yapfast.
+pub fn warn_if_microphone_denied() {
+    if microphone_denied() {
+        tracing::warn!(
+            "macOS doesn't let Yapfast use the microphone, which hears silence: allow it in \
+             System Settings › Privacy & Security › Microphone"
+        );
+    }
+}
+
 /// The rate every stream runs at, unless it asks for another.
 pub const RATE: u32 = 48_000;
 

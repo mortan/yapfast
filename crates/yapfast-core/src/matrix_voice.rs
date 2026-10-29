@@ -782,6 +782,8 @@ async fn set_muted(
             audio.recording_devices().next().is_some(),
             "No microphone found. Connect a microphone and refresh devices."
         );
+        // WebRTC's device module records the silence macOS hands over.
+        crate::audio_io::warn_if_microphone_denied();
         if let Some(track) = microphone.as_ref() {
             audio.start_recording().context(
                 "Could not start your microphone. Check permissions or choose another device.",

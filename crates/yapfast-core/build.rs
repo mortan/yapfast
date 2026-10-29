@@ -45,7 +45,8 @@ fn main() {
         }
     }
     // macOS films through AVFoundation, with camera.cc's interface, and
-    // libyuv from the same archive.
+    // libyuv from the same archive. camera_mac.m also tells audio_io whether
+    // macOS allows the microphone, so every macOS build compiles it.
     if target_os == "macos" {
         cc::Build::new()
             .file("native/camera_mac.m")
