@@ -212,50 +212,72 @@ struct Detector {
     known: HashMap<u32, Known>,
     selection: Selection,
     generation: u64,
-    executables: Vec<(String, Arc<GameInfo>)>,
+    executables: Vec<CustomExecutable>,
+}
+
+/// A custom game's executable, as a Windows path is compared, which a Wine
+/// process's is on Linux and macOS too, and as this system's own are, made
+/// once rather than for each process.
+struct CustomExecutable {
+    windows: String,
+    native: String,
+    game: Arc<GameInfo>,
+}
+
+impl CustomExecutable {
+    fn new(executable: &str, game: Arc<GameInfo>) -> Self {
+        Self {
+            windows: normalize(executable, true).into_owned(),
+            native: normalize(executable, false).into_owned(),
+            game,
+        }
+    }
+}
+
+/// A path as custom games compare it: Windows' with forward slashes and
+/// without its `\\?\` prefix, and Windows' and macOS's in lower case, as
+/// their file systems ignore case.
+fn normalize(path: &str, windows: bool) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if windows {
+        let mut path = path.replace('\\', "/").to_lowercase();
+        if path.starts_with("//?/unc/") {
+            path.replace_range(..8, "//");
+        } else if path.starts_with("//?/") {
+            path.drain(..4);
+        }
+        Cow::Owned(path)
+    } else if cfg!(target_os = "macos") {
+        Cow::Owned(path.trim_end_matches('/').to_lowercase())
+    } else {
+        Cow::Borrowed(path)
+    }
 }
 
 /// The custom game a process's executable is: a file name matches it in any
 /// folder, a full path only there. Windows and macOS paths ignore case, as
 /// their file systems do, and on macOS an app's bundle, as Finder shows it,
 /// matches the executable inside it.
-fn custom_match(
-    entries: &[(String, Arc<GameInfo>)],
-    path: &str,
-    windows: bool,
-) -> Option<Arc<GameInfo>> {
-    use std::borrow::Cow;
+fn custom_match(entries: &[CustomExecutable], path: &str, windows: bool) -> Option<Arc<GameInfo>> {
     if entries.is_empty() {
         return None;
     }
-    fn normalize(s: &str, windows: bool, macos: bool) -> Cow<'_, str> {
-        if windows {
-            let mut path = s.replace('\\', "/").to_lowercase();
-            if path.starts_with("//?/unc/") {
-                path.replace_range(..8, "//");
-            } else if path.starts_with("//?/") {
-                path.drain(..4);
-            }
-            Cow::Owned(path)
-        } else if macos {
-            Cow::Owned(s.trim_end_matches('/').to_lowercase())
-        } else {
-            Cow::Borrowed(s)
-        }
-    }
     let macos = cfg!(target_os = "macos") && !windows;
-    let actual = normalize(path, windows, macos);
+    let actual = normalize(path, windows);
     let bundle = macos.then(|| catalog::app_bundle(&actual)).flatten();
-    entries.iter().find_map(|(executable, game)| {
-        let expected = normalize(executable, windows, macos);
+    entries.iter().find_map(|entry| {
+        let expected = match windows {
+            true => &entry.windows,
+            false => &entry.native,
+        };
         let matches = |actual: &str| {
             if expected.contains('/') {
                 expected == actual
             } else {
-                actual.rsplit('/').next() == Some(expected.as_ref())
+                actual.rsplit('/').next() == Some(expected.as_str())
             }
         };
-        (matches(actual.as_ref()) || bundle.is_some_and(matches)).then(|| game.clone())
+        (matches(actual.as_ref()) || bundle.is_some_and(matches)).then(|| entry.game.clone())
     })
 }
 
@@ -362,13 +384,11 @@ impl Detector {
             .iter()
             .filter(|game| !game.executable.trim().is_empty() && !game.name.trim().is_empty())
             .map(|game| {
-                (
-                    game.executable.trim().to_owned(),
-                    Arc::new(GameInfo {
-                        id: None,
-                        name: game.name.trim().into(),
-                    }),
-                )
+                let info = GameInfo {
+                    id: None,
+                    name: game.name.trim().into(),
+                };
+                CustomExecutable::new(game.executable.trim(), Arc::new(info))
             })
             .collect();
         self.generation = self.generation.wrapping_add(1);
@@ -602,7 +622,8 @@ mod tests {
             id: None,
             name: "Custom".into(),
         });
-        let names = vec![("Game.exe".into(), title.clone())];
+        let entry = |executable: &str| [CustomExecutable::new(executable, title.clone())];
+        let names = entry("Game.exe");
         assert!(custom_match(&names, "C:\\Games\\GAME.EXE", true).is_some());
         assert_eq!(
             custom_match(&names, "/games/game.exe", false).is_some(),
@@ -610,12 +631,12 @@ mod tests {
             "elsewhere case counts"
         );
         assert!(custom_match(&names, "/games/OtherGame.exe", true).is_none());
-        let paths = vec![("C:\\Games\\Game.exe".into(), title.clone())];
+        let paths = entry("C:\\Games\\Game.exe");
         assert!(custom_match(&paths, "\\\\?\\C:\\Games\\GAME.exe", true).is_some());
         assert!(custom_match(&paths, "C:\\Other\\Game.exe", true).is_none());
-        let unc = vec![("\\\\server\\games\\game.exe".into(), title.clone())];
+        let unc = entry("\\\\server\\games\\game.exe");
         assert!(custom_match(&unc, "\\\\?\\UNC\\SERVER\\games\\GAME.exe", true).is_some());
-        let unix = vec![("/games/game".into(), title)];
+        let unix = entry("/games/game");
         assert!(custom_match(&unix, "/games/game", false).is_some());
         assert!(custom_match(&unix, "/other/games/game", false).is_none());
     }
@@ -635,14 +656,14 @@ mod tests {
             "celeste",
             executable,
         ] {
-            let entries = [(entry.into(), title.clone())];
+            let entries = [CustomExecutable::new(entry, title.clone())];
             assert!(
                 custom_match(&entries, executable, false).is_some(),
                 "{entry}"
             );
         }
         for entry in ["Other.app", "/Applications/Celeste", "/Games/Celeste.app"] {
-            let entries = [(entry.into(), title.clone())];
+            let entries = [CustomExecutable::new(entry, title.clone())];
             assert!(
                 custom_match(&entries, executable, false).is_none(),
                 "{entry}"
