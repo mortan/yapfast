@@ -295,6 +295,23 @@ fn watch_window(window: &YapfastWindow, adapter: &Rc<RefCell<Adapter>>) {
             adapter.borrow_mut().drag(&window, drag);
         }
     })));
+    // winit reports no key for Caps Lock or Fn on macOS; AppKit records them.
+    #[cfg(target_os = "macos")]
+    {
+        let (adapter, weak) = (adapter.clone(), window.as_weak());
+        crate::push_to_talk::watch_flag_keys(move |key| {
+            let Some(window) = weak.upgrade().filter(|window| window.get_talk_recording()) else {
+                return;
+            };
+            window.set_talk_recording(false);
+            let (adapter, weak) = (adapter.clone(), weak.clone());
+            slint::Timer::single_shot(Duration::ZERO, move || {
+                if let (Some(adapter), Some(window)) = (adapter.upgrade(), weak.upgrade()) {
+                    adapter.borrow_mut().set_talk_key(&window, key);
+                }
+            });
+        });
+    }
     // The winit window exists once the event loop runs.
     let weak = window.as_weak();
     slint::Timer::single_shot(Duration::ZERO, move || {

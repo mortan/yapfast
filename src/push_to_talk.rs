@@ -216,6 +216,8 @@ pub struct Watcher {
 use linux::Global;
 #[cfg(target_os = "macos")]
 use macos::Tap as Global;
+#[cfg(target_os = "macos")]
+pub use macos::watch_flag_keys;
 #[cfg(windows)]
 use windows::Hook as Global;
 
@@ -971,19 +973,105 @@ mod windows {
 
 #[cfg(target_os = "macos")]
 mod macos {
-    use std::{cell::Cell, ffi::c_void, ptr, ptr::NonNull, sync::mpsc};
-
-    use objc2_core_foundation::{CFMachPort, CFRetained, CFRunLoop, kCFRunLoopCommonModes};
-    use objc2_core_graphics::{
-        CGEvent, CGEventField, CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement,
-        CGEventTapProxy, CGEventType, CGPreflightListenEventAccess, CGRequestListenEventAccess,
+    use std::{
+        cell::{Cell, OnceCell, RefCell},
+        ffi::c_void,
+        ptr,
+        ptr::NonNull,
+        sync::{atomic::Ordering, mpsc},
     };
 
-    use super::{Reach, Report};
+    use block2::RcBlock;
+    use objc2::{rc::Retained, runtime::AnyObject};
+    use objc2_app_kit::{NSEvent, NSEventMask};
+    use objc2_core_foundation::{CFMachPort, CFRetained, CFRunLoop, kCFRunLoopCommonModes};
+    use objc2_core_graphics::{
+        CGEvent, CGEventField, CGEventFlags, CGEventSource, CGEventSourceStateID,
+        CGEventTapLocation, CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
+        CGPreflightListenEventAccess, CGRequestListenEventAccess,
+    };
+
+    use super::{FOCUSED_KEY, Keybind, Reach, Report};
+
+    /// Virtual key codes: `kVK_CapsLock` and `kVK_Function`, the Fn or
+    /// Globe key.
+    const CAPS_LOCK: u32 = 0x39;
+    const FN: u32 = 0x3F;
 
     thread_local! {
         /// The tap of the thread it runs on, for its callback to re-enable.
         static PORT: Cell<*const CFMachPort> = const { Cell::new(ptr::null()) };
+        /// What records Caps Lock or Fn pressed in Yapfast, on the main
+        /// thread.
+        static RECORDED: RefCell<Option<Recorder>> = const { RefCell::new(None) };
+        /// AppKit's monitor of the flag events in Yapfast, kept for good.
+        static MONITOR: OnceCell<Option<Retained<AnyObject>>> = const { OnceCell::new() };
+    }
+
+    type Recorder = Box<dyn Fn(Keybind)>;
+
+    impl Keybind {
+        /// Caps Lock or Fn, by its virtual key code.
+        fn flag(keycode: u32) -> Option<Self> {
+            let name = match keycode {
+                CAPS_LOCK => "Caps Lock",
+                FN => "Fn",
+                _ => return None,
+            };
+            Some(Self {
+                scancode: keycode,
+                name: name.to_owned(),
+                trigger: None,
+            })
+        }
+    }
+
+    /// winit reports no key events for Caps Lock and Fn, which change only
+    /// modifier flags, so AppKit's flag events in Yapfast record them,
+    /// calling `recorded`, and hold them while the window's own events
+    /// stand in for the tap. Call it on the main thread; a later call
+    /// replaces `recorded`.
+    pub fn watch_flag_keys(recorded: impl Fn(Keybind) + 'static) {
+        RECORDED.replace(Some(Box::new(recorded)));
+        MONITOR.with(|monitor| {
+            monitor.get_or_init(|| {
+                let handler = RcBlock::new(|event: NonNull<NSEvent>| {
+                    // SAFETY: AppKit hands over the event it's dispatching.
+                    let flags = unsafe { event.as_ref() };
+                    flag_changed(u32::from(flags.keyCode()), flags.modifierFlags().0 as u64);
+                    event.as_ptr()
+                });
+                // SAFETY: the handler gives back the event it was given,
+                // so the window still gets it.
+                unsafe {
+                    NSEvent::addLocalMonitorForEventsMatchingMask_handler(
+                        NSEventMask::FlagsChanged,
+                        &handler,
+                    )
+                }
+            });
+        });
+    }
+
+    /// A flag event in Yapfast's window: Caps Lock pressed, either way, or
+    /// Fn pressed or let go.
+    fn flag_changed(keycode: u32, flags: u64) {
+        let Some(key) = Keybind::flag(keycode) else {
+            return;
+        };
+        let Some(held) = held(CGEventType::FlagsChanged, keycode.into(), flags, keycode) else {
+            return;
+        };
+        if FOCUSED_KEY.load(Ordering::Relaxed) == keycode {
+            yapfast_core::push_to_talk::hold(held);
+        }
+        if held || keycode == CAPS_LOCK {
+            RECORDED.with_borrow(|recorded| {
+                if let Some(recorded) = recorded {
+                    recorded(key);
+                }
+            });
+        }
     }
 
     /// A listen-only event tap on a thread of its own, which sees every
@@ -1045,6 +1133,14 @@ mod macos {
                     // SAFETY: a constant Core Foundation defines.
                     run_loop.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
                     CGEvent::tap_enable(&port, true);
+                    // Caps Lock holds while it's on, which no event says
+                    // until it's pressed again.
+                    if keycode == CAPS_LOCK
+                        && CGEventSource::flags_state(CGEventSourceStateID::CombinedSessionState)
+                            .contains(CGEventFlags::MaskAlphaShift)
+                    {
+                        yapfast_core::push_to_talk::hold(true);
+                    }
                     let _ = started.send(Some(Tap {
                         port: port.clone(),
                         run_loop,
@@ -1114,7 +1210,9 @@ mod macos {
 
     /// Whether an event holds the key `keycode`, lets it go, or neither:
     /// keys go down and up; a modifier's FlagsChanged has its flag set
-    /// while it's held, the side's own where there are two.
+    /// while it's held, the side's own where there are two. Caps Lock
+    /// says only that it was pressed, turning its lock on or off, so it
+    /// holds while the lock is on, as its light shows.
     fn held(kind: CGEventType, code: i64, flags: u64, keycode: u32) -> Option<bool> {
         if code != i64::from(keycode) {
             return None;
@@ -1132,8 +1230,8 @@ mod macos {
                     0x3A => 0x0000_0020, // Left Option
                     0x3D => 0x0000_0040, // Right Option
                     0x3E => 0x0000_2000, // Right Control
-                    0x39 => 0x0001_0000, // Caps Lock: kCGEventFlagMaskAlphaShift, its lock
-                    0x3F => 0x0080_0000, // Fn: kCGEventFlagMaskSecondaryFn
+                    CAPS_LOCK => CGEventFlags::MaskAlphaShift.0,
+                    FN => CGEventFlags::MaskSecondaryFn.0,
                     _ => return None,
                 };
                 Some(flags & flag != 0)
@@ -1148,8 +1246,6 @@ mod macos {
             sync::Arc,
             time::{Duration, Instant},
         };
-
-        use objc2_core_graphics::CGEventFlags;
 
         use super::*;
 
@@ -1188,6 +1284,33 @@ mod macos {
             assert_eq!(held(FLAGS, 0x38, 0x2_0006, RIGHT_SHIFT), None);
             // Right Shift up with the left one still down.
             assert_eq!(held(FLAGS, 0x3C, 0x2_0002, RIGHT_SHIFT), Some(false));
+            // Caps Lock turned on, and off; Fn down and up.
+            assert_eq!(held(FLAGS, 0x39, 0x1_0000, CAPS_LOCK), Some(true));
+            assert_eq!(held(FLAGS, 0x39, 0, CAPS_LOCK), Some(false));
+            assert_eq!(held(FLAGS, 0x3F, 0x80_0000, FN), Some(true));
+            assert_eq!(held(FLAGS, 0x3F, 0, FN), Some(false));
+            // Shift while Caps Lock is the key, and the lock is on.
+            assert_eq!(held(FLAGS, 0x38, 0x3_0002, CAPS_LOCK), None);
+        }
+
+        /// Caps Lock and Fn are recorded from AppKit's flag events, Caps
+        /// Lock either way it turns and Fn as it goes down.
+        #[test]
+        fn caps_lock_and_fn_are_recorded() {
+            let recorded = std::rc::Rc::new(RefCell::new(Vec::new()));
+            let into = recorded.clone();
+            RECORDED.replace(Some(Box::new(move |key: Keybind| {
+                into.borrow_mut().push(key.name)
+            })));
+            flag_changed(CAPS_LOCK, 0x1_0000);
+            flag_changed(CAPS_LOCK, 0);
+            flag_changed(FN, 0x80_0000);
+            flag_changed(FN, 0);
+            flag_changed(0x38, 0x2_0002); // Left Shift
+            assert_eq!(*recorded.borrow(), ["Caps Lock", "Caps Lock", "Fn"]);
+            assert_eq!(Keybind::flag(CAPS_LOCK).unwrap().scancode, 0x39);
+            assert_eq!(Keybind::flag(FN).unwrap().scancode, 0x3F);
+            RECORDED.replace(None);
         }
 
         /// The tap hears the key typed anywhere, down and up. Needs Input
