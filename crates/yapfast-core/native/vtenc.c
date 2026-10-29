@@ -20,7 +20,7 @@
 #include "libyuv/convert_from.h"
 
 /* The codecs, as Rust numbers them. */
-enum { CODEC_H264, CODEC_HEVC, CODEC_AV1 };
+enum { CODEC_H264, CODEC_HEVC };
 
 struct yapfast_hwenc {
   VTCompressionSessionRef session;
@@ -231,10 +231,7 @@ static OSStatus open_session(struct yapfast_hwenc *h, unsigned fps, unsigned kbp
   /* A new viewer waits at most this long for a picture. */
   status = set_int(session, kVTCompressionPropertyKey_MaxKeyFrameInterval, (int32_t)fps * 3);
   if (status == noErr) {
-    CFNumberRef seconds = number(3);
-    status = VTSessionSetProperty(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration,
-                                  seconds);
-    CFRelease(seconds);
+    status = set_int(session, kVTCompressionPropertyKey_MaxKeyFrameIntervalDuration, 3);
   }
   if (status != noErr) return status;
   *step = "setting the frame rate";
@@ -248,17 +245,13 @@ static OSStatus open_session(struct yapfast_hwenc *h, unsigned fps, unsigned kbp
 }
 
 /* Opens VideoToolbox's hardware encoder for `codec_id` and writes its name
- * to `report`, or why it didn't open. AV1 has none. */
+ * to `report`, or why it didn't open. */
 struct yapfast_hwenc *yapfast_hwenc_new(unsigned codec_id, unsigned width, unsigned height,
                                         unsigned fps, unsigned kbps, char *report,
                                         size_t report_size) {
   if (report_size) report[0] = 0;
-  if (codec_id > CODEC_AV1) return NULL;
+  if (codec_id > CODEC_HEVC) return NULL;
   const char *label = codec_id == CODEC_HEVC ? "VideoToolbox H265" : "VideoToolbox H264";
-  if (codec_id == CODEC_AV1) {
-    if (report_size) snprintf(report, report_size, "VideoToolbox: no AV1 encoder");
-    return NULL;
-  }
   struct yapfast_hwenc *h = calloc(1, sizeof *h);
   if (!h) return NULL;
   h->codec = (int)codec_id;
