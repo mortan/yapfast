@@ -306,7 +306,6 @@ impl Shell {
     }
 
     /// Does what a button in the window would, with the window or without it.
-    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     fn act(&self, action: Action) {
         let mut adapter = self.adapter.borrow_mut();
         match self.window() {
@@ -358,7 +357,6 @@ pub(super) fn launched(token: Option<String>) {
 }
 
 /// What the person chose in the tray.
-#[cfg(any(target_os = "linux", windows, target_os = "macos"))]
 fn chosen(choice: Choice) {
     let Some(shell) = SHELL.with(|shell| shell.borrow().upgrade()) else {
         return;
@@ -390,12 +388,6 @@ fn chosen(choice: Choice) {
             }
         }
     }
-}
-
-/// No tray here chooses anything.
-#[cfg(not(any(target_os = "linux", windows, target_os = "macos")))]
-fn chosen(choice: Choice) {
-    match choice {}
 }
 
 impl Adapter {

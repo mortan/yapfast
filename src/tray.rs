@@ -3,18 +3,19 @@
 //! a notification-area icon on Windows, and a menu-bar item on macOS. Clicking
 //! it opens the window, or on macOS its menu; the menu opens Yapfast, leaves a
 //! call and quits.
+// Elsewhere there's no tray to choose anything or draw the logo.
+#![cfg_attr(
+    not(any(target_os = "linux", windows, target_os = "macos")),
+    allow(dead_code)
+)]
 
 use std::cell::Cell;
 
-/// What the tray asks for, or says. Each runs on Slint's event loop. Only
-/// Linux, Windows and macOS have a tray.
+/// What the tray asks for, or says. Each runs on Slint's event loop.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Choice {
-    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     Open,
-    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     Disconnect,
-    #[cfg(any(target_os = "linux", windows, target_os = "macos"))]
     Quit,
     /// A tray came or went, which decides what closing the window does.
     #[cfg(any(target_os = "linux", windows))]
@@ -62,7 +63,6 @@ impl Tray {
 
 /// Yapfast's logo in Yap's marigold, `size` pixels square, with a red dot for
 /// unread messages cut into its corner.
-#[cfg(any(target_os = "linux", windows, target_os = "macos", test))]
 fn logo(size: u32, unread: bool) -> Option<slint::SharedPixelBuffer<slint::Rgba8Pixel>> {
     let mut svg = include_str!("../ui/icons/logo.svg")
         .replacen(
