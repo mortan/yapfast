@@ -386,26 +386,38 @@ pub fn run() -> Result<()> {
     // The stream connection uses TLS; nothing else here has started it.
     let _ = crate::init_tls();
     let mut output = std::io::stdout();
-    serve(Box::new(BufReader::new(std::io::stdin())), &mut |report| {
-        // Yapfast is gone if this fails; the job ends when its input closes.
-        let _ = writeln!(
-            output,
-            "{}",
-            serde_json::to_string(&report).unwrap_or_default()
-        );
-        let _ = output.flush();
-    });
+    let starter = std::env::var(BUILD).ok();
+    let input = Box::new(BufReader::new(std::io::stdin()));
+    serve(
+        starter.as_deref(),
+        build().as_deref(),
+        input,
+        &mut |report| {
+            // Yapfast is gone if this fails; the job ends when its input closes.
+            let _ = writeln!(
+                output,
+                "{}",
+                serde_json::to_string(&report).unwrap_or_default()
+            );
+            let _ = output.flush();
+        },
+    );
     Ok(())
 }
 
-fn serve(mut input: Box<dyn BufRead + Send>, report: &mut dyn FnMut(Report)) {
+/// Runs the job `input` starts with, for a Yapfast of the build `starter`
+/// when it says, refusing one of another build than `own`.
+fn serve(
+    starter: Option<&str>,
+    own: Option<&str>,
+    mut input: Box<dyn BufRead + Send>,
+    report: &mut dyn FnMut(Report),
+) {
     let mut line = String::new();
     let job = match input.read_line(&mut line) {
-        Ok(_) => {
-            same_build(std::env::var(BUILD).ok().as_deref(), build().as_deref()).and_then(|()| {
-                serde_json::from_str::<Job>(&line).map_err(|error| anyhow!("unknown job: {error}"))
-            })
-        }
+        Ok(_) => same_build(starter, own).and_then(|()| {
+            serde_json::from_str::<Job>(&line).map_err(|error| anyhow!("unknown job: {error}"))
+        }),
         Err(error) => Err(error.into()),
     };
     let stop = Arc::new(AtomicBool::new(false));
@@ -1604,6 +1616,24 @@ mod tests {
         assert!(same_build(Some("a"), None).is_ok(), "an unknown build");
         let refused = same_build(Some("a"), Some("b")).unwrap_err();
         assert!(refused.to_string().contains("reopen"), "{refused}");
+        // The worker refuses before it runs the job: no Ready, only the end.
+        let job = Job::Glance {
+            screens: vec![1],
+            width: 32,
+            height: 18,
+        };
+        let input = format!("{}\n", serde_json::to_string(&job).unwrap());
+        let mut reports = Vec::new();
+        serve(
+            Some("another"),
+            Some("this"),
+            Box::new(std::io::Cursor::new(input)),
+            &mut |report| reports.push(report),
+        );
+        assert!(
+            matches!(&reports[..], [Report::Ended { error: Some(error) }] if error.contains("reopen")),
+            "{reports:?}"
+        );
     }
 
     #[test]
@@ -1754,7 +1784,7 @@ mod tests {
         writeln!(feed, "{}", serde_json::to_string(&job).unwrap()).unwrap();
         let (sender, reports) = std::sync::mpsc::channel();
         let serving = std::thread::spawn(move || {
-            serve(Box::new(BufReader::new(input)), &mut |report| {
+            serve(None, None, Box::new(BufReader::new(input)), &mut |report| {
                 sender.send(report).unwrap();
             });
         });
@@ -1813,7 +1843,7 @@ mod tests {
         let (input, mut feed) = std::io::pipe().unwrap();
         writeln!(feed, "{}", serde_json::to_string(&job).unwrap()).unwrap();
         let mut reports = vec![];
-        serve(Box::new(BufReader::new(input)), &mut |report| {
+        serve(None, None, Box::new(BufReader::new(input)), &mut |report| {
             reports.push(report)
         });
         let pictured: Vec<u64> = reports
@@ -1869,7 +1899,7 @@ mod tests {
             writeln!(feed, "{}", serde_json::to_string(&job).unwrap()).unwrap();
             let (sender, reports) = std::sync::mpsc::channel();
             let serving = std::thread::spawn(move || {
-                serve(Box::new(BufReader::new(input)), &mut |report| {
+                serve(None, None, Box::new(BufReader::new(input)), &mut |report| {
                     sender.send(report).unwrap();
                 });
             });
@@ -1919,9 +1949,14 @@ mod tests {
         };
         let mut reports = Vec::new();
         let input = format!("{}\n", serde_json::to_string(&gone).unwrap());
-        serve(Box::new(std::io::Cursor::new(input)), &mut |report| {
-            reports.push(report);
-        });
+        serve(
+            None,
+            None,
+            Box::new(std::io::Cursor::new(input)),
+            &mut |report| {
+                reports.push(report);
+            },
+        );
         assert_eq!(
             reports,
             [
