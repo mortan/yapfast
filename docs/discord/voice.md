@@ -467,8 +467,9 @@ Discord has no default key, and neither does Yapfast. "Record keybind" takes
 the next key pressed, and Escape stops without changing it; until there's a
 key, settings say the microphone sends nothing. Yapfast keeps the key by its
 scan code (`push_to_talk_key`), so it's the same key on any keyboard layout,
-with its name and, for the portal below, its keysym. One key, without
-modifiers; mouse buttons can't be recorded.
+with its name, as the system names it (Command, Option and Control on macOS),
+and, for the portal below, its keysym. One key, without modifiers; mouse
+buttons can't be recorded.
 
 `crates/yapfast-core/src/push_to_talk.rs` keeps the mode, whether the key is
 down and the delay in atomics. The microphone reads them each 10 ms block,

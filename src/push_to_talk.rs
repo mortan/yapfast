@@ -66,23 +66,30 @@ fn name(event: &KeyEvent) -> String {
     };
     match unmodified(event) {
         Key::Character(text) => format!("{side}{}", text.to_uppercase()),
-        Key::Named(named) => {
-            let named = match named {
-                NamedKey::Control => "Ctrl".to_owned(),
-                NamedKey::Super | NamedKey::Meta => "Super".to_owned(),
-                NamedKey::ArrowUp => "Up".to_owned(),
-                NamedKey::ArrowDown => "Down".to_owned(),
-                NamedKey::ArrowLeft => "Left".to_owned(),
-                NamedKey::ArrowRight => "Right".to_owned(),
-                NamedKey::Space => "Space".to_owned(),
-                named => format!("{named:?}"),
-            };
-            format!("{side}{named}")
-        }
+        Key::Named(named) => format!("{side}{}", key_name(named)),
         _ => match event.physical_key {
             PhysicalKey::Code(code) => format!("{code:?}"),
             PhysicalKey::Unidentified(_) => "Unknown key".to_owned(),
         },
+    }
+}
+
+/// A named key as the system's own keyboard settings call it: Command,
+/// Option and Control on macOS.
+fn key_name(named: NamedKey) -> String {
+    let mac = cfg!(target_os = "macos");
+    match named {
+        NamedKey::Control if mac => "Control".to_owned(),
+        NamedKey::Control => "Ctrl".to_owned(),
+        NamedKey::Super | NamedKey::Meta if mac => "Command".to_owned(),
+        NamedKey::Super | NamedKey::Meta => "Super".to_owned(),
+        NamedKey::Alt if mac => "Option".to_owned(),
+        NamedKey::ArrowUp => "Up".to_owned(),
+        NamedKey::ArrowDown => "Down".to_owned(),
+        NamedKey::ArrowLeft => "Left".to_owned(),
+        NamedKey::ArrowRight => "Right".to_owned(),
+        NamedKey::Space => "Space".to_owned(),
+        named => format!("{named:?}"),
     }
 }
 
@@ -273,6 +280,26 @@ impl Drop for Watcher {
 }
 
 type Report = Arc<dyn Fn(Reach) + Send + Sync>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_are_named_as_the_system_names_them() {
+        let (control, command, option) = if cfg!(target_os = "macos") {
+            ("Control", "Command", "Option")
+        } else {
+            ("Ctrl", "Super", "Alt")
+        };
+        assert_eq!(key_name(NamedKey::Control), control);
+        assert_eq!(key_name(NamedKey::Super), command);
+        assert_eq!(key_name(NamedKey::Alt), option);
+        assert_eq!(key_name(NamedKey::Shift), "Shift");
+        assert_eq!(key_name(NamedKey::ArrowUp), "Up");
+        assert_eq!(key_name(NamedKey::F5), "F5");
+    }
+}
 
 #[cfg(target_os = "linux")]
 mod linux {
