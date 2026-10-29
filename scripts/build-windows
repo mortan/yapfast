@@ -2,14 +2,19 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # The Discord flavour is the release; full adds Matrix, as a separate preview.
-# Their features are release_package.py's FLAVOURS. Arguments after the
-# flavour go to scripts/package-windows.py, such as --no-installer.
+# Arguments after the flavour go to scripts/package-windows.py, such as
+# --no-installer.
 flavour=${1:-discord}
-case $flavour in
-  discord) features=(--no-default-features --features desktop,discord) ;;
-  full) features=() ;;
-  *) echo "usage: scripts/build-windows [discord|full] [package-windows.py options]" >&2; exit 2 ;;
-esac
+# Its Cargo features, one per line, from release_package.py's FLAVOURS.
+if ! listed=$(python3 -c 'import sys; sys.path.insert(0, "scripts"); from release_package import FLAVOURS
+print(*FLAVOURS[sys.argv[1]]["features"], sep="\n")' "$flavour" 2>/dev/null); then
+  echo "usage: scripts/build-windows [discord|full] [package-windows.py options]" >&2
+  exit 2
+fi
+features=()
+while IFS= read -r feature; do
+  if [[ -n "$feature" ]]; then features+=("$feature"); fi
+done <<<"$listed"
 shift $(($# > 0 ? 1 : 0))
 rustup target add x86_64-pc-windows-msvc
 mkdir -p "$PWD/.local/windows"

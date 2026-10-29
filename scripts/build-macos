@@ -6,17 +6,22 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # The Discord flavour is the release; full adds Matrix, as a separate preview.
-# Their features are release_package.py's FLAVOURS. --dev builds the measure
-# profile instead, optimized as release but incremental, so that the app is
-# ready seconds after a small edit: for trying it here, not for release; its
-# package goes to target/dist/macos/FLAVOUR-dev, with -dev in its names.
+# --dev builds the measure profile instead, optimized as release but
+# incremental, so that the app is ready seconds after a small edit: for trying
+# it here, not for release; its package goes to target/dist/macos/FLAVOUR-dev,
+# with -dev in its names.
 # Later arguments go to scripts/package-macos.py.
 flavour=${1:-discord}
-case $flavour in
-  discord) features=(--no-default-features --features desktop,discord) ;;
-  full) features=() ;;
-  *) echo "usage: scripts/build-macos [discord|full] [--dev] [package-macos.py options]" >&2; exit 2 ;;
-esac
+# Its Cargo features, one per line, from release_package.py's FLAVOURS.
+if ! listed=$(python3 -c 'import sys; sys.path.insert(0, "scripts"); from release_package import FLAVOURS
+print(*FLAVOURS[sys.argv[1]]["features"], sep="\n")' "$flavour" 2>/dev/null); then
+  echo "usage: scripts/build-macos [discord|full] [--dev] [package-macos.py options]" >&2
+  exit 2
+fi
+features=()
+while IFS= read -r feature; do
+  if [[ -n "$feature" ]]; then features+=("$feature"); fi
+done <<<"$listed"
 shift $(($# > 0 ? 1 : 0))
 profile=release
 if [ "${1:-}" = --dev ]; then
