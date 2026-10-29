@@ -1095,6 +1095,8 @@ export component NotificationSettings inherits VerticalLayout {
     /// The networks in use, whose rules decide what notifies.
     in property <bool> matrix;
     in property <bool> discord;
+    /// On a Mac, where the attention a message asks bounces the Dock icon.
+    in property <bool> macos;
     callback preferences-changed;
     spacing: 16px;
     SettingsTitle { text: "Notifications"; }
@@ -1115,7 +1117,7 @@ export component NotificationSettings inherits VerticalLayout {
         toggled => { root.preferences-changed(); }
     }
     SettingsSwitch {
-        text: "Flash the taskbar";
+        text: root.macos ? "Bounce the Dock icon" : "Flash the taskbar";
         description: "For a message that notifies while Yapfast isn't in front. The window's title counts mentions and DMs waiting either way.";
         checked <=> root.flash-taskbar;
         toggled => { root.preferences-changed(); }
@@ -1186,25 +1188,29 @@ export component AdvancedSettings inherits VerticalLayout {
     in-out property <bool> multiple-windows;
     in-out property <bool> start-on-sign-in;
     in property <bool> autostart-available;
+    /// On a Mac, where the tray is the menu bar, and opening Yapfast again
+    /// reaches the one running rather than starting another.
+    in property <bool> macos;
     callback preferences-changed;
     callback restart;
+    property <string> tray: root.macos ? "the menu bar" : "the system tray";
     spacing: 16px;
     SettingsTitle { text: "Advanced"; }
     if root.autostart-available: SettingsSwitch {
         text: "Start when you sign in";
-        description: "Yapfast starts in the system tray when you sign in to your computer, so messages and calls reach you.";
+        description: "Yapfast starts in " + root.tray + " when you sign in to your computer, so messages and calls reach you.";
         checked <=> root.start-on-sign-in;
         toggled => { root.preferences-changed(); }
     }
     SettingsSwitch {
-        text: "Close to tray";
+        text: root.macos ? "Close to the menu bar" : "Close to tray";
         description: root.tray-available
-            ? "Closing the window keeps Yapfast running in the system tray, with any call. Quit from the tray icon's menu."
+            ? "Closing the window keeps Yapfast running in " + root.tray + ", with any call. Quit from " + (root.macos ? "its icon's menu there." : "the tray icon's menu.")
             : "No system tray is running, so closing the window quits Yapfast.";
         checked <=> root.close-to-tray;
         toggled => { root.preferences-changed(); }
     }
-    SettingsSwitch {
+    if !root.macos: SettingsSwitch {
         text: "Allow multiple windows";
         description: "Starting Yapfast while it runs opens another Yapfast, with its own window and tray icon. Off, it brings the open window forward.";
         checked <=> root.multiple-windows;

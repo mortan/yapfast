@@ -252,6 +252,7 @@ fn isolated_display() -> bool {
 }
 
 fn prepare(window: &YapfastWindow) {
+    window.set_macos(cfg!(target_os = "macos"));
     // The entry is the setting, so each window reads it as it is.
     let autostart = AUTOSTART.get();
     window.set_autostart_available(autostart);

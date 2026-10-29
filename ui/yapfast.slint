@@ -1041,6 +1041,9 @@ export component YapfastWindow inherits Window {
     in property <bool> tray-available;
     /// Starting Yapfast again starts another, rather than showing this window.
     in-out property <bool> multiple-windows;
+    /// Yapfast runs on macOS, whose words for the tray and the taskbar
+    /// Settings uses.
+    in property <bool> macos;
     /// The desktop draws the title bar, as set; offered where Yapfast can
     /// draw its own.
     in-out property <bool> system-title-bar: true;
@@ -3292,7 +3295,7 @@ export component YapfastWindow inherits Window {
         if root.settings-section == 3: NotificationSettings {
             notifications <=> root.notifications; notification-text <=> root.notification-text;
             flash-taskbar <=> root.flash-taskbar;
-            matrix: root.matrix-build; discord: root.discord-linked;
+            matrix: root.matrix-build; discord: root.discord-linked; macos: root.macos;
             preferences-changed => { root.preferences-changed(); }
         }
         if root.settings-section == 5: SoundSettings {
@@ -3308,6 +3311,7 @@ export component YapfastWindow inherits Window {
             close-to-tray <=> root.close-to-tray; tray-available: root.tray-available;
             multiple-windows <=> root.multiple-windows;
             start-on-sign-in <=> root.start-on-sign-in; autostart-available: root.autostart-available;
+            macos: root.macos;
             preferences-changed => { root.preferences-changed(); }
             restart => { root.restart(); }
         }

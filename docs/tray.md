@@ -7,8 +7,8 @@ corner while a mention or a DM waits unread, as Discord counts them. Clicking
 it opens the window (on macOS, the menu). Its menu has Open Yapfast, Disconnect during a call, and
 Quit.
 
-Settings → Advanced has "Close to tray", on unless turned off
-(`close_to_tray` in `layout.json`). Off, or with no tray to show the icon,
+Settings → Advanced has "Close to tray", on macOS "Close to the menu bar",
+on unless turned off (`close_to_tray` in `layout.json`). Off, or with no tray to show the icon,
 closing the window quits Yapfast; the setting's description
 says when there's no tray. A tray that starts after Yapfast, or comes back,
 still gets the icon.
@@ -20,7 +20,8 @@ one's window forward, making it again if it was closed to the tray, and the
 new start ends (`src/instance.rs`). A start with `--background`, as at
 sign-in, just ends. Settings → Advanced → "Allow multiple windows"
 (`multiple_windows` in `layout.json`, off unless turned on) starts another
-Yapfast instead, with its own window and tray icon. Each folder is its own:
+Yapfast instead, with its own window and tray icon; macOS hides the switch,
+as opening `Yapfast.app` again reaches the running app. Each folder is its own:
 another `--data-dir` always starts. The preview never asks.
 
 The first start holds a lock on `instance.lock` in the folder, which the
