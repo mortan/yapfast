@@ -16,15 +16,12 @@ import stat
 import subprocess
 import tarfile
 import tempfile
-import urllib.parse
 
-from release_package import ROOT, dependency_notices, digest, license_file, names_home, source_snapshot
+from release_package import (FLAVOURS, ROOT, SKIA_VERSION, UI_FRAMEWORK, build_hashes, build_identity, cargo_metadata,
+                             check_executable, dependency_notices, digest, license_file, local_skia_archive,
+                             source_notice, source_snapshot)
 
 TARGET = "aarch64-apple-darwin"
-FLAVOURS = {
-    "discord": {"features": ["--no-default-features", "--features", "desktop,discord"], "suffix": ""},
-    "full": {"features": [], "suffix": "-full-preview"},
-}
 CACHE = Path.home() / "Library/Caches/yapfast-build"
 # scripts/make-macos-signing-identity makes it.
 SIGNING_KEYCHAIN = Path.home() / "Library/Keychains/yapfast-signing.keychain-db"
@@ -151,33 +148,12 @@ def main():
     args = parser.parse_args()
     flavour = FLAVOURS[args.flavour]
     executable = args.executable.resolve()
-    newest_input = max(path.stat().st_mtime for path in
-                       [ROOT / "Cargo.toml", ROOT / "Cargo.lock", ROOT / "build.rs",
-                        *(ROOT / "src").rglob("*.rs"), *(ROOT / "ui").rglob("*")]
-                       if path.is_file())
-    if executable.stat().st_mtime < newest_input:
-        raise SystemExit("The executable predates the source; run scripts/build-macos first")
+    check_executable(executable, args.flavour, "scripts/build-macos")
     archs = subprocess.check_output(["lipo", "-archs", str(executable)], text=True, timeout=30).split()
     if archs != ["arm64"]:
         raise SystemExit(f"Expected an arm64 executable, not {' '.join(archs)}")
-    contents = executable.read_bytes()
-    if names_home(contents):
-        raise SystemExit(f"{executable} names {Path.home()}; build it with scripts/build-macos")
-    # Both flavours build to the same path; the Matrix SDK's source paths
-    # tell which one is there.
-    if (b"/matrix-rust-sdk-" in contents) != (args.flavour == "full"):
-        raise SystemExit(f"{executable} isn't the {args.flavour} flavour; run scripts/build-macos {args.flavour}")
-    del contents
-    metadata = json.loads(subprocess.check_output(
-        ["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", TARGET,
-         *flavour["features"]],
-        cwd=ROOT, timeout=30,
-    ))
-    version = next(package["version"] for package in metadata["packages"] if package["name"] == "yapfast")
-    skia_url = urllib.parse.urlparse(os.environ["SKIA_BINARIES_URL"])
-    if skia_url.scheme != "file":
-        raise SystemExit("Packaging requires the pinned local Skia archive")
-    skia_archive = Path(urllib.parse.unquote(skia_url.path))
+    metadata, version = cargo_metadata(TARGET, flavour["features"])
+    skia_archive = local_skia_archive(os.environ["SKIA_BINARIES_URL"])
     skia = skia_source()
     identity = os.environ.get("YAPFAST_CODESIGN_IDENTITY") or ("Yapfast Dev" if SIGNING_KEYCHAIN.exists() else "-")
 
@@ -201,31 +177,19 @@ def main():
         shutil.copy2(executable, app / "Contents/MacOS/yapfast")
         shutil.copy2(ROOT / "packaging/macos/yapfast.icns", resources / "yapfast.icns")
         shutil.copy2(ROOT / "LICENSE", resources / "LICENSE")
-        source_url = f"https://github.com/yapfast/yapfast/releases/tag/v{version}{flavour['suffix']}"
-        (resources / "SOURCE.txt").write_text(
-            f"The source code of this build of Yapfast {version}"
-            + (", with the exact source of\nthe libraries it includes under the AGPL," if rtc else "")
-            + " is published with it:\n\n"
-            f"  {source_url}\n  {source_path.name}, SHA-256 in BUILD.json\n\n"
-            "and in the repository, https://github.com/yapfast/yapfast. The licenses folder\n"
-            "holds every dependency's own license and notices.\n",
-            encoding="utf-8",
-        )
+        (resources / "SOURCE.txt").write_text(source_notice(version, flavour["suffix"], source_path, rtc),
+                                              encoding="utf-8")
         dependencies = dependency_notices(metadata, resources, resources / "licenses", skia_archive, skia,
                                           Path(os.environ["LK_CUSTOM_WEBRTC"]))
         (resources / "THIRD-PARTY.json").write_text(json.dumps(dependencies, indent=2) + "\n", encoding="utf-8")
         build = {
-            "version": version, "flavour": args.flavour, "target": TARGET,
-            "cargo_features": " ".join(flavour["features"]) or "default",
+            **build_identity(version, args.flavour, TARGET, flavour["features"]),
             "rustc": subprocess.check_output(["rustc", "--version"], text=True, timeout=10).strip(),
             "macos_sdk": subprocess.check_output(["xcrun", "--show-sdk-version"], text=True, timeout=10).strip(),
             "macos_deployment_target": os.environ["MACOSX_DEPLOYMENT_TARGET"],
-            "ui_framework": "Slint 1.18.1",
-            "skia_version": "0.153.3",
-            "skia_archive_prepared_sha256": digest(skia_archive),
-            "cargo_lock_sha256": digest(ROOT / "Cargo.lock"),
-            "executable_sha256": digest(executable),
-            "source_archive_sha256": digest(source_path),
+            "ui_framework": UI_FRAMEWORK,
+            "skia_version": SKIA_VERSION,
+            **build_hashes(skia_archive, executable, source_path),
             "webrtc_tag": "webrtc-51ef663",
             "webrtc_archive_sha256": WEBRTC_ARCHIVE_SHA256,
             "signature": "ad hoc" if identity == "-" else identity,

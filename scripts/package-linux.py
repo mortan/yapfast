@@ -12,12 +12,13 @@ from pathlib import Path
 import shutil
 import subprocess
 import tempfile
-import urllib.parse
 
-from release_package import ROOT, dependency_notices, digest, names_home, source_snapshot
+from release_package import (FLAVOURS, ROOT, SKIA_VERSION, UI_FRAMEWORK, build_hashes, build_identity, cargo_metadata,
+                             dependency_notices, digest, local_skia_archive, names_home, source_notice,
+                             source_snapshot)
 
 TARGET = "x86_64-unknown-linux-gnu"
-FEATURES = ["--no-default-features", "--features", "desktop,discord"]
+FEATURES = FLAVOURS["discord"]["features"]
 
 
 def nix_build(installable):
@@ -32,15 +33,8 @@ def main():
     # The flake sees only files Git tracks; a new one must be added first.
     parts = nix_build(".#appdir")
     skia_source = nix_build("path:./nix#skia-source")
-    metadata = json.loads(subprocess.check_output(
-        ["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", TARGET, *FEATURES],
-        cwd=ROOT, timeout=30,
-    ))
-    version = next(package["version"] for package in metadata["packages"] if package["name"] == "yapfast")
-    skia_url = urllib.parse.urlparse(os.environ["SKIA_BINARIES_URL"])
-    if skia_url.scheme != "file":
-        raise SystemExit("Packaging requires the pinned local Skia archive")
-    skia_archive = Path(urllib.parse.unquote(skia_url.path))
+    metadata, version = cargo_metadata(TARGET, FEATURES)
+    skia_archive = local_skia_archive(os.environ["SKIA_BINARIES_URL"])
     webrtc = Path(os.environ["LK_CUSTOM_WEBRTC"])
     output = args.output
     output.mkdir(parents=True, exist_ok=True)
@@ -67,28 +61,17 @@ def main():
         doc = appdir / "usr/share/doc/yapfast"
         doc.mkdir(parents=True)
         shutil.copy2(ROOT / "LICENSE", doc / "LICENSE")
-        (doc / "SOURCE.txt").write_text(
-            f"The source code of this build of Yapfast {version} is published with it:\n\n"
-            f"  https://github.com/yapfast/yapfast/releases/tag/v{version}\n"
-            f"  {source_path.name}, SHA-256 in BUILD.json\n\n"
-            "and in the repository, https://github.com/yapfast/yapfast. The licenses folder\n"
-            "holds every dependency's own license and notices.\n",
-            encoding="utf-8",
-        )
+        (doc / "SOURCE.txt").write_text(source_notice(version, "", source_path, rtc), encoding="utf-8")
         dependencies = dependency_notices(metadata, doc, doc / "licenses", skia_archive, skia_source, webrtc)
         (doc / "THIRD-PARTY.json").write_text(json.dumps(dependencies, indent=2) + "\n", encoding="utf-8")
         lock = json.loads((ROOT / "flake.lock").read_text())["nodes"]["nixpkgs"]["locked"]
         build = {
-            "version": version, "flavour": "discord", "target": TARGET,
-            "cargo_features": " ".join(FEATURES),
+            **build_identity(version, "discord", TARGET, FEATURES),
             "built_by": "nix build .#appdir",
             "nixpkgs_revision": lock["rev"],
-            "ui_framework": "Slint 1.18.1",
-            "skia_version": "0.153.3",
-            "skia_archive_prepared_sha256": digest(skia_archive),
-            "cargo_lock_sha256": digest(ROOT / "Cargo.lock"),
-            "executable_sha256": digest(executable),
-            "source_archive_sha256": digest(source_path),
+            "ui_framework": UI_FRAMEWORK,
+            "skia_version": SKIA_VERSION,
+            **build_hashes(skia_archive, executable, source_path),
             **build,
         }
         (doc / "BUILD.json").write_text(json.dumps(build, indent=2) + "\n", encoding="utf-8")

@@ -37,7 +37,7 @@ such as Ubuntu 22.04, would need a build against their own glibc.
 squashfs-tools and zsync added from the shell's nixpkgs, adds the
 licenses and notices, `THIRD-PARTY.json`, `SOURCE.txt` and `BUILD.json` to
 `usr/share/doc/yapfast`, as the Windows package has them, through the helpers
-in `scripts/release_package.py` that both packaging scripts use. Skia's
+in `scripts/release_package.py` that every packaging script uses. Skia's
 prebuilt Linux archive carries only Skia's own license, so the notices of its
 third-party code come from the pinned Skia source,
 `nix build path:./nix#skia-source`. Then it packs the AppDir with mksquashfs

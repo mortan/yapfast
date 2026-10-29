@@ -2,8 +2,8 @@
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 # The Discord flavour is the release; full adds Matrix, as a separate preview.
-# Arguments after the flavour go to scripts/package-windows.py, such as
-# --no-installer.
+# Their features are release_package.py's FLAVOURS. Arguments after the
+# flavour go to scripts/package-windows.py, such as --no-installer.
 flavour=${1:-discord}
 case $flavour in
   discord) features=(--no-default-features --features desktop,discord) ;;

@@ -12,9 +12,10 @@ import shutil
 import struct
 import subprocess
 import tempfile
-import urllib.parse
 
-from release_package import ROOT, dependency_notices, digest, names_home, source_snapshot, zip_directory
+from release_package import (FLAVOURS, ROOT, SKIA_VERSION, UI_FRAMEWORK, build_hashes, build_identity, cargo_metadata,
+                             check_executable, dependency_notices, digest, first_steps, local_skia_archive,
+                             source_notice, source_snapshot, zip_directory)
 
 TARGET = "x86_64-pc-windows-msvc"
 # Inno Setup's compiler, run under Wine; installed once into its own prefix.
@@ -22,12 +23,8 @@ INNO_SETUP_VERSION = "7.1.0"
 INNO_SETUP_URL = ("https://github.com/jrsoftware/issrc/releases/download/is-7_1_0/"
                   f"innosetup-{INNO_SETUP_VERSION}-x64.exe")
 INNO_SETUP_SHA256 = "0362a383ed217d4c4239b5933866dd96d3eb2102737da92f80f6057a4b40df2f"
-# Cargo features, the suffix of file names and release tag, and the name the
-# installer shows, for each flavour scripts/build-windows builds.
-FLAVOURS = {
-    "discord": {"features": ["--no-default-features", "--features", "desktop,discord"], "suffix": "", "edition": None},
-    "full": {"features": [], "suffix": "-full-preview", "edition": "full preview"},
-}
+# The name the installer shows for each flavour.
+EDITIONS = {"discord": None, "full": "full preview"}
 
 
 def wine_environment(prefix):
@@ -75,8 +72,8 @@ def compile_installer(package, version, flavour, output):
     # The file's version resource takes only numbers, without a nightly's suffix.
     definitions = [f"/DAppVersion={version}", f"/DVersionNumber={version.split('-')[0]}",
                    f"/DSourceDir={windows_path(package)}"]
-    if FLAVOURS[flavour]["edition"]:
-        definitions += [f"/DEdition={FLAVOURS[flavour]['edition']}", f"/DFileSuffix={FLAVOURS[flavour]['suffix']}"]
+    if EDITIONS[flavour]:
+        definitions += [f"/DEdition={EDITIONS[flavour]}", f"/DFileSuffix={FLAVOURS[flavour]['suffix']}"]
     license_path = ROOT / "LICENSE"
     if license_path.is_file():
         definitions.append(f"/DLicenseFile={windows_path(license_path)}")
@@ -98,14 +95,6 @@ def main():
     flavour = FLAVOURS[args.flavour]
     output = args.output or ROOT / "target/dist" / args.flavour
     executable = args.exe.resolve()
-    newest_input = max(path.stat().st_mtime for path in
-                       [ROOT / "Cargo.toml", ROOT / "Cargo.lock", ROOT / "build.rs",
-                        *list((ROOT / "src").rglob("*.rs")), *list((ROOT / "ui").rglob("*")),
-                        *list((ROOT / "packaging").rglob("*"))]
-                       # The installer's script doesn't go into the executable.
-                       if path.is_file() and path.suffix != ".iss")
-    if executable.stat().st_mtime < newest_input:
-        raise SystemExit("Windows executable predates the current UI; run scripts/build-windows first")
     with executable.open("rb") as stream:
         header = stream.read(64)
         if header[:2] != b"MZ":
@@ -114,21 +103,9 @@ def main():
         pe = stream.read(6)
         if pe[:4] != b"PE\0\0" or struct.unpack_from("<H", pe, 4)[0] != 0x8664:
             raise SystemExit("Expected an AMD64 Windows PE executable")
-    contents = executable.read_bytes()
-    if names_home(contents):
-        raise SystemExit(f"{executable} names {Path.home()}; build it with scripts/build-windows")
-    # Both flavours build to the same path; the Matrix SDK's source paths
-    # tell which one is there.
-    if (b"/matrix-rust-sdk-" in contents) != (args.flavour == "full"):
-        raise SystemExit(f"{executable} isn't the {args.flavour} flavour; run scripts/build-windows {args.flavour}")
-    del contents
+    check_executable(executable, args.flavour, "scripts/build-windows")
     # Only the packages this flavour's features build.
-    metadata = json.loads(subprocess.check_output(
-        ["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", TARGET,
-         *flavour["features"]],
-        cwd=ROOT, timeout=30,
-    ))
-    version = next(package["version"] for package in metadata["packages"] if package["name"] == "yapfast")
+    metadata, version = cargo_metadata(TARGET, flavour["features"])
     output.mkdir(parents=True, exist_ok=True)
     base = f"Yapfast-{version}{flavour['suffix']}"
     archive_path = output / f"{base}-windows-x64.zip"
@@ -143,40 +120,15 @@ def main():
         shutil.copy2(ROOT / "LICENSE", package / "LICENSE.txt")
         # The source snapshot goes beside the packages, on the release page,
         # rather than into every install; SOURCE.txt says where.
-        source_url = f"https://github.com/yapfast/yapfast/releases/tag/v{version}{flavour['suffix']}"
-        (package / "SOURCE.txt").write_text(
-            f"The source code of this build of Yapfast {version}"
-            + (", with the exact source of\nthe libraries it includes under the AGPL," if rtc else "")
-            + " is published with it:\n\n"
-            f"  {source_url}\n  {source_path.name}, SHA-256 in BUILD.json\n\n"
-            "and in the repository, https://github.com/yapfast/yapfast. The licenses folder\n"
-            "holds every dependency's own license and notices.\n",
-            encoding="utf-8", newline="\r\n",
-        )
-        if args.flavour == "discord":
-            first_steps = (
-                "3. Link your Discord account: Yapfast shows a QR code, which Discord on\n"
-                "   your phone scans (Settings, Scan QR Code). Discord doesn't allow apps\n"
-                "   like Yapfast on personal accounts; linking puts your account at some\n"
-                "   risk of being suspended.\n"
-                "4. Open a channel, or a voice channel to talk.\n\n"
-                "No account or saved session is included.\n"
-            )
-            secrets = "password or Discord token"
-        else:
-            first_steps = (
-                "3. Sign in with your Matrix account; the homeserver is editable.\n"
-                "   Or link Discord, which shows a QR code for Discord on your phone.\n"
-                "4. Open a room, or a voice channel to talk.\n\n"
-                "Passwords, recovery keys and saved sessions are not included.\n"
-            )
-            secrets = "password or recovery key"
-        edition = f" ({flavour['edition']})" if flavour["edition"] else ""
+        (package / "SOURCE.txt").write_text(source_notice(version, flavour["suffix"], source_path, rtc),
+                                            encoding="utf-8", newline="\r\n")
+        steps, secrets = first_steps(args.flavour)
+        edition = f" ({EDITIONS[args.flavour]})" if EDITIONS[args.flavour] else ""
         (package / "README.txt").write_text(
             f"Yapfast{edition} for 64-bit Windows 10/11\n\n"
             "1. Extract the entire ZIP to a folder.\n"
             "2. Double-click yapfast.exe.\n"
-            + first_steps +
+            + steps +
             "No Rust, Visual Studio, or separate app installation is required.\n"
             "Yapfast writes diagnostics to yapfast.log in its data folder,\n"
             "%LOCALAPPDATA%\\Yapfast\\Yapfast\\data, or to the console run-yapfast.cmd opens.\n"
@@ -206,30 +158,23 @@ def main():
             if len(archives) != 1:
                 raise SystemExit("Prepare the pinned Windows Skia archive before packaging")
             skia_location = archives[0].as_uri()
-        skia_url = urllib.parse.urlparse(skia_location)
-        if skia_url.scheme != "file":
-            raise SystemExit("Packaging requires the pinned local Skia archive")
-        skia_archive = Path(urllib.parse.unquote(skia_url.path))
+        skia_archive = local_skia_archive(skia_location)
         dependencies = dependency_notices(metadata, package, package / "licenses", skia_archive,
                                           Path(os.environ["YAPFAST_SKIA_WINDOWS_SOURCE"]),
                                           Path(os.environ["LK_CUSTOM_WEBRTC"]))
         (package / "THIRD-PARTY.json").write_text(json.dumps(dependencies, indent=2) + "\n", encoding="utf-8")
         build = {
-            "version": version, "flavour": args.flavour, "target": TARGET,
-            "cargo_features": " ".join(flavour["features"]) or "default",
+            **build_identity(version, args.flavour, TARGET, flavour["features"]),
             "rustc": subprocess.check_output(["rustc", "--version"], text=True, timeout=10).strip(),
             "cargo_xwin": subprocess.check_output(["cargo", "xwin", "--version"], text=True, timeout=10).strip(),
-            "ui_framework": "Slint 1.18.1",
+            "ui_framework": UI_FRAMEWORK,
             "renderer_default": "skia-opengl, falling back to skia-software",
             "renderer_software": "skia-software",
-            "skia_version": "0.153.3",
+            "skia_version": SKIA_VERSION,
             "skia_source_revision": "61e7ca4e99062cdd0ab69445d5963fb3365778f6",
             "skia_source_archive_sha256": "8401d0de878582a03abc1029bb62330aea58cda89904ae6ab187302e6d48ba5d",
             "skia_runtime": "MT_StaticRelease",
-            "skia_archive_prepared_sha256": digest(skia_archive),
-            "cargo_lock_sha256": digest(ROOT / "Cargo.lock"),
-            "executable_sha256": digest(executable),
-            "source_archive_sha256": digest(source_path),
+            **build_hashes(skia_archive, executable, source_path),
             "webrtc_tag": "webrtc-51ef663",
             "webrtc_archive_sha256": "0a56a5c91b3b7b4222082b8a09388d16a802cde22d67295beb24c55700755b30",
         }

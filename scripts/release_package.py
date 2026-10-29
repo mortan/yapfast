@@ -1,15 +1,29 @@
-"""What scripts/package-windows.py and scripts/package-linux.py share: the
-source snapshot each release carries, and the dependencies' licenses and
-notices each package holds."""
+"""What scripts/package-linux.py, scripts/package-windows.py and
+scripts/package-macos.py share: the checks of the executable, the source
+snapshot each release carries, its SOURCE.txt and the common part of its
+BUILD.json, and the dependencies' licenses and notices each package holds."""
 import hashlib
+import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tarfile
+import urllib.parse
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
+# Cargo features and the suffix of file names and release tag, for each
+# flavour scripts/build-windows and scripts/build-macos build. The Discord
+# flavour is the release; the full one, with Matrix, goes out as a separate
+# preview.
+FLAVOURS = {
+    "discord": {"features": ["--no-default-features", "--features", "desktop,discord"], "suffix": ""},
+    "full": {"features": [], "suffix": "-full-preview"},
+}
+UI_FRAMEWORK = "Slint 1.18.1"
+SKIA_VERSION = "0.153.3"
 SOURCE_FILES = ("Cargo.toml", "Cargo.lock", "build.rs", "rust-toolchain.toml", "README.md", "LICENSE", ".gitignore")
 SOURCE_DIRECTORIES = (".cargo", "src", "ui", "packaging", "crates", "scripts", "nix", "vendor", "testing", "docs")
 
@@ -37,6 +51,120 @@ def names_home(contents):
     """Whether a binary names this machine's home folder, as Rust's panic
     messages and C's asserts do when built without scripts/release-env."""
     return any(str(Path.home()).encode(encoding) in contents for encoding in ("utf-8", "utf-16-le"))
+
+
+def dep_info_paths(text):
+    """The files a Makefile rule from Cargo's dep-info depends on."""
+    paths = []
+    for line in text.splitlines():
+        _, separator, dependencies = line.partition(": ")
+        if separator:
+            # Cargo escapes a space in a path with a backslash.
+            paths += [path.replace("\\ ", " ") for path in re.split(r"(?<!\\) +", dependencies.strip()) if path]
+    return paths
+
+
+def newest_input(dep_info):
+    """The newest modification time among an executable's inputs: the
+    manifest and lockfile, whose version and dependencies go into it, and the
+    files Cargo's dep-info names, the repository's sources and vendor/ among
+    them. A folder a build script watches counts with the files in it, apart
+    from dotfiles such as Finder's .DS_Store. A file that's gone counts as
+    new."""
+    newest = 0.0
+    for name in ["Cargo.toml", "Cargo.lock", *dep_info_paths(dep_info.read_text(encoding="utf-8"))]:
+        path = ROOT / name
+        if path.is_dir():
+            newest = max([newest, *(file.stat().st_mtime for file in path.rglob("*") if file.is_file()
+                                    and not any(part.startswith(".") for part in file.relative_to(path).parts))])
+        elif path.is_file():
+            newest = max(newest, path.stat().st_mtime)
+        else:
+            return float("inf")
+    return newest
+
+
+def check_executable(executable, flavour, build_script):
+    """Stops unless executable is a release build of flavour from the current
+    source, built as build_script builds it."""
+    # Cargo writes the dep-info beside the executable it builds.
+    dep_info = executable.with_suffix(".d")
+    if not dep_info.is_file() or executable.stat().st_mtime < newest_input(dep_info):
+        raise SystemExit(f"{executable} predates its source; run {build_script} first")
+    contents = executable.read_bytes()
+    if names_home(contents):
+        raise SystemExit(f"{executable} names {Path.home()}; build it with {build_script}")
+    # Both flavours build to the same path; the Matrix SDK's source paths
+    # tell which one is there.
+    if (b"/matrix-rust-sdk-" in contents) != (flavour == "full"):
+        raise SystemExit(f"{executable} isn't the {flavour} flavour; run {build_script} {flavour}")
+
+
+def cargo_metadata(target, features):
+    """Cargo's metadata of the packages these features build for target, and
+    Yapfast's version."""
+    metadata = json.loads(subprocess.check_output(
+        ["cargo", "metadata", "--locked", "--format-version", "1", "--filter-platform", target, *features],
+        cwd=ROOT, timeout=30,
+    ))
+    return metadata, next(package["version"] for package in metadata["packages"] if package["name"] == "yapfast")
+
+
+def local_skia_archive(location):
+    """The prepared Skia archive that SKIA_BINARIES_URL, or location, names."""
+    url = urllib.parse.urlparse(location)
+    if url.scheme != "file":
+        raise SystemExit("Packaging requires the pinned local Skia archive")
+    return Path(urllib.parse.unquote(url.path))
+
+
+def source_notice(version, suffix, source_path, rtc):
+    """SOURCE.txt: where the source code of this build is published."""
+    return (
+        f"The source code of this build of Yapfast {version}"
+        + (", with the exact source of\nthe libraries it includes under the AGPL," if rtc else "")
+        + " is published with it:\n\n"
+        f"  https://github.com/yapfast/yapfast/releases/tag/v{version}{suffix}\n"
+        f"  {source_path.name}, SHA-256 in BUILD.json\n\n"
+        "and in the repository, https://github.com/yapfast/yapfast. The licenses folder\n"
+        "holds every dependency's own license and notices.\n"
+    )
+
+
+def first_steps(flavour):
+    """README.txt's steps 3 and 4 for flavour, after it has started, and the
+    secrets it holds that must never go in a report."""
+    if flavour == "discord":
+        return (
+            "3. Link your Discord account: Yapfast shows a QR code, which Discord on\n"
+            "   your phone scans (Settings, Scan QR Code). Discord doesn't allow apps\n"
+            "   like Yapfast on personal accounts; linking puts your account at some\n"
+            "   risk of being suspended.\n"
+            "4. Open a channel, or a voice channel to talk.\n\n"
+            "No account or saved session is included.\n"
+        ), "password or Discord token"
+    return (
+        "3. Sign in with your Matrix account; the homeserver is editable.\n"
+        "   Or link Discord, which shows a QR code for Discord on your phone.\n"
+        "4. Open a room, or a voice channel to talk.\n\n"
+        "Passwords, recovery keys and saved sessions are not included.\n"
+    ), "password or recovery key"
+
+
+def build_identity(version, flavour, target, features):
+    """The fields that begin each BUILD.json."""
+    return {"version": version, "flavour": flavour, "target": target,
+            "cargo_features": " ".join(features) or "default"}
+
+
+def build_hashes(skia_archive, executable, source_path):
+    """The hashes BUILD.json records of what went into the package."""
+    return {
+        "skia_archive_prepared_sha256": digest(skia_archive),
+        "cargo_lock_sha256": digest(ROOT / "Cargo.lock"),
+        "executable_sha256": digest(executable),
+        "source_archive_sha256": digest(source_path),
+    }
 
 
 def source_snapshot(metadata, base, temporary, destination):
