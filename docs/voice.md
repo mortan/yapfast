@@ -204,7 +204,7 @@ restart or a reconnect. Yapfast keeps such a device by its Core Audio UID
 instead, which `audio_io` opens, and chooses it for a Yapfast call by the
 number WebRTC lists for that UID now. A number an older build saved in
 `devices.json` becomes its device's UID at the next start, if a device has
-it then.
+it then, or else once a device is listed with it.
 
 A call's own speakers and microphone, and a watched stream's sound, outlast
 their device (`audio_io::LastingOutput` and `LastingInput`). Bluetooth

@@ -530,7 +530,12 @@ async fn worker(
                 trim_after_call();
             }
             Command::Devices => match devices(&mut state) {
-                Ok(()) => state.error = None,
+                Ok(moved) => {
+                    state.error = None;
+                    if moved {
+                        Chosen::write(remembered.as_deref(), &state);
+                    }
+                }
                 Err(error) => state.error = Some(error.to_string()),
             },
             Command::Microphone(id) => {
@@ -624,7 +629,8 @@ impl Chosen {
             .unwrap_or_default();
         // Older builds kept a Mac's devices by WebRTC's number for them,
         // which another device may get; each still connected moves to its
-        // UID, as `device_id` lists it.
+        // UID, as `device_id` lists it, and one that isn't once it's listed
+        // (`collect_devices`).
         #[cfg(target_os = "macos")]
         {
             let mut moved = false;
@@ -684,11 +690,12 @@ pub fn list_devices() -> Result<Devices> {
     })
 }
 
-pub(crate) fn devices(state: &mut State) -> Result<()> {
+/// Lists the devices into `state`; true when a remembered device moved to
+/// its id, as [`collect_devices`] says.
+pub(crate) fn devices(state: &mut State) -> Result<bool> {
     state.cameras = crate::camera::list();
     let audio = audio()?;
-    collect_devices(&audio, state);
-    Ok(())
+    Ok(collect_devices(&audio, state))
 }
 
 pub(crate) fn audio() -> Result<PlatformAudio> {
@@ -700,21 +707,46 @@ pub(crate) fn audio() -> Result<PlatformAudio> {
     })
 }
 
-pub(crate) fn collect_devices(audio: &PlatformAudio, state: &mut State) {
+/// Lists the microphones and speakers by Yapfast's ids. A remembered device
+/// an older build kept by WebRTC's number for it on macOS moves to its UID
+/// when it's listed with that number, as [`Chosen::read`] moves one that's
+/// connected at start; true when one moved, for the caller to save.
+pub(crate) fn collect_devices(audio: &PlatformAudio, state: &mut State) -> bool {
+    let mut moved = false;
     state.microphones = audio
         .recording_devices()
-        .map(|device| Device {
-            id: device_id(device.id.as_str(), &device.name),
-            name: device.name,
+        .map(|device| {
+            listed(
+                device.id.as_str(),
+                device.name,
+                &mut state.microphone,
+                &mut moved,
+            )
         })
         .collect();
     state.speakers = audio
         .playout_devices()
-        .map(|device| Device {
-            id: device_id(device.id.as_str(), &device.name),
-            name: device.name,
+        .map(|device| {
+            listed(
+                device.id.as_str(),
+                device.name,
+                &mut state.speaker,
+                &mut moved,
+            )
         })
         .collect();
+    moved
+}
+
+/// A listed device, moving `chosen` from its number to its id if it names
+/// it so.
+fn listed(guid: &str, name: String, chosen: &mut Option<String>, moved: &mut bool) -> Device {
+    let id = device_id(guid, &name);
+    if cfg!(target_os = "macos") && id != guid && chosen.as_deref() == Some(guid) {
+        *chosen = Some(id.clone());
+        *moved = true;
+    }
+    Device { id, name }
 }
 
 /// WebRTC's PulseAudio devices have no GUID, and LiveKit selects only by GUID,
@@ -741,6 +773,33 @@ pub const NAMED: &str = "name:";
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A number an older build kept moves to its device's UID once the
+    /// device is listed with it, as when it's plugged in after the start.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_listed_number_moves_to_its_uid() {
+        let (mut chosen, mut moved) = (Some(u32::MAX.to_string()), false);
+        listed(
+            &u32::MAX.to_string(),
+            "Gone".into(),
+            &mut chosen,
+            &mut moved,
+        );
+        assert!(!moved, "no device has that number");
+        let number = (1..1000u32)
+            .map(|number| number.to_string())
+            .find(|number| crate::audio_io::device_uid(number).is_some());
+        let Some(number) = number else {
+            eprintln!("no sound device");
+            return;
+        };
+        let mut chosen = Some(number.clone());
+        let device = listed(&number, "Speakers".into(), &mut chosen, &mut moved);
+        assert!(moved);
+        assert_ne!(device.id, number);
+        assert_eq!(chosen, Some(device.id));
+    }
 
     #[test]
     fn devices_without_a_guid_are_known_by_name_and_choices_stay_on_disk() {

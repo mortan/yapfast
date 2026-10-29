@@ -452,7 +452,9 @@ async fn connected(
                         set_hearing(&call, !deafened);
                     }
                     Some(Command::Devices) => {
-                        collect_devices(&audio, state);
+                        if collect_devices(&audio, state) {
+                            Chosen::write(remembered, state);
+                        }
                         state.cameras = crate::camera::list();
                     }
                     Some(Command::Microphone(id)) => {

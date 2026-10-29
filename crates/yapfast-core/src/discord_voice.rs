@@ -559,7 +559,11 @@ pub(crate) async fn call(
                             hearing.set_deafened(deafened);
                             Watch::hear(&mut watch, !deafened);
                         }
-                        Some(Command::Devices) => { let _ = devices(state); }
+                        Some(Command::Devices) => {
+                            if devices(state).unwrap_or(false) {
+                                Chosen::write(remembered, state);
+                            }
+                        }
                         Some(Command::Microphone(id)) => {
                             state.microphone = Some(id);
                             Chosen::write(remembered, state);
