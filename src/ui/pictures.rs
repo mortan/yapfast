@@ -452,7 +452,7 @@ impl Model for Frames {
         if row >= self.row_count() {
             return None;
         }
-        let now = Duration::from_millis(i_slint_core::animations::current_tick().0);
+        let now = animation_clock();
         let image = {
             let mut decoding = self.decoding.borrow_mut();
             decoding.used = Some(now);
@@ -461,9 +461,7 @@ impl Model for Frames {
         FRAME_SWEEP.with(|timer| {
             if !timer.running() {
                 timer.start(slint::TimerMode::Repeated, IDLE_FRAMES, || {
-                    if !sweep(Duration::from_millis(
-                        i_slint_core::animations::current_tick().0,
-                    )) {
+                    if !sweep(animation_clock()) {
                         FRAME_SWEEP.with(slint::Timer::stop);
                     }
                 });
@@ -526,6 +524,15 @@ impl Frames {
             .as_ref()
             .map_or_else(|| picture(&self.picture), |(_, image)| image.clone())
     }
+}
+
+/// Slint's animation clock, read without making the binding that asks for a
+/// frame depend on it: one that did would be evaluated again, and its picture
+/// drawn again, at every refresh of the screen, not at the animation's pace.
+fn animation_clock() -> Duration {
+    i_slint_core::properties::evaluate_no_tracking(|| {
+        Duration::from_millis(i_slint_core::animations::current_tick().0)
+    })
 }
 
 /// Lets runs that stopped showing give up their decoders and frames.
@@ -717,6 +724,34 @@ fn gallery_cells(previews: &[Preview<'_>], covered: &dyn Fn(usize) -> bool) -> (
 #[cfg(all(test, feature = "discord"))]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_asked_for_by_a_binding_leaves_it_off_the_animation_clock() {
+        let mut gif = Vec::new();
+        {
+            let mut encoder = image::codecs::gif::GifEncoder::new(&mut gif);
+            for shade in [0, 255] {
+                let frame = image::Frame::from_parts(
+                    image::RgbaImage::from_pixel(4, 4, image::Rgba([shade, 0, 0, 255])),
+                    0,
+                    0,
+                    image::Delay::from_numer_denom_ms(100, 1),
+                );
+                encoder.encode_frame(frame).unwrap();
+            }
+        }
+        let picture = Arc::new(yapfast_core::chat::decode_picture(&gif, 4, 4).unwrap());
+        let (frames, _) = animation(&picture);
+        let source = Box::pin(i_slint_core::Property::<bool>::default());
+        source.set_binding(move || frames.row_data(0).is_some());
+        assert!(source.as_ref().get());
+
+        let now = i_slint_core::animations::current_tick();
+        i_slint_core::animations::update_animations(i_slint_core::animations::Instant(now.0 + 16));
+        // Dirty, the picture would be drawn again at every refresh of the
+        // screen instead of at the animation's pace.
+        assert!(!source.is_dirty());
+    }
 
     #[test]
     fn galleries_copy_only_requested_previews_and_bound_their_cache() {
