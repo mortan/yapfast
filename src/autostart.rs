@@ -38,10 +38,8 @@ pub fn refresh() {
 
 /// What starts Yapfast in the tray, with the data folder this one uses.
 fn command() -> std::io::Result<Vec<String>> {
-    let program = std::env::current_exe()?;
-    #[cfg(target_os = "linux")]
-    let program = crate::desktop_entry::appimage(&program).unwrap_or(program);
-    let mut command = vec![path_text(program)?, "--background".to_owned()];
+    let mut command = program()?;
+    command.push("--background".to_owned());
     let arguments: Vec<String> = std::env::args().collect();
     if let Some(index) = arguments
         .iter()
@@ -52,6 +50,21 @@ fn command() -> std::io::Result<Vec<String>> {
         command.extend(["--data-dir".to_owned(), path_text(folder)?]);
     }
     Ok(command)
+}
+
+/// What runs this Yapfast: its executable, or an AppImage's file rather
+/// than its temporary mount. Yapfast.app is opened through LaunchServices,
+/// which finds it wherever it is at sign-in: the path it runs from now may
+/// be one macOS made up for a quarantined app, gone after the next sign-in.
+fn program() -> std::io::Result<Vec<String>> {
+    #[cfg(target_os = "macos")]
+    if crate::icon::bundled() {
+        return Ok(macos::LAUNCH.map(str::to_owned).to_vec());
+    }
+    let program = std::env::current_exe()?;
+    #[cfg(target_os = "linux")]
+    let program = crate::desktop_entry::appimage(&program).unwrap_or(program);
+    Ok(vec![path_text(program)?])
 }
 
 fn path_text(path: PathBuf) -> std::io::Result<String> {
@@ -381,6 +394,18 @@ mod windows {
 mod macos {
     use std::path::{Path, PathBuf};
 
+    /// Opens Yapfast.app by its bundle ID, as another process even if one
+    /// runs, which then ends as a later start does, and without bringing it
+    /// forward. With the app deleted, `open` fails and nothing starts.
+    pub(super) const LAUNCH: [&str; 6] = [
+        "/usr/bin/open",
+        "-n",
+        "-g",
+        "-b",
+        crate::icon::APP_ID,
+        "--args",
+    ];
+
     pub fn enabled() -> bool {
         home().is_some_and(|home| agent_enabled(&home))
     }
@@ -409,12 +434,28 @@ mod macos {
             .join(format!("{}.plist", crate::icon::APP_ID))
     }
 
-    /// The agent is there and not turned off with its `Disabled` key.
+    /// The agent is there, not turned off with its `Disabled` key, and the
+    /// program it runs is there too: one naming a binary since deleted
+    /// starts nothing.
     pub(super) fn agent_enabled(home: &Path) -> bool {
         std::fs::read_to_string(agent(home)).is_ok_and(|agent| {
-            let agent: String = agent.split_whitespace().collect();
-            !agent.contains("<key>Disabled</key><true/>")
+            let squeezed: String = agent.split_whitespace().collect();
+            !squeezed.contains("<key>Disabled</key><true/>")
+                && program(&agent).is_some_and(|program| Path::new(&program).exists())
         })
+    }
+
+    /// The first of the agent's ProgramArguments, as `plist` writes them.
+    fn program(agent: &str) -> Option<String> {
+        let arguments = &agent[agent.find("<key>ProgramArguments</key>")?..];
+        let start = arguments.find("<string>")? + "<string>".len();
+        let length = arguments[start..].find("</string>")?;
+        Some(
+            arguments[start..start + length]
+                .replace("&lt;", "<")
+                .replace("&gt;", ">")
+                .replace("&amp;", "&"),
+        )
     }
 
     /// launchd starts it as the person signs in, in their graphical session.
@@ -462,15 +503,15 @@ mod macos {
         use super::*;
 
         #[test]
-        fn writes_an_agent_that_starts_in_the_menu_bar() {
+        fn writes_an_agent_that_opens_the_app_in_the_menu_bar() {
             let home = tempfile::tempdir().unwrap();
             assert!(!agent_enabled(home.path()));
-            let command = [
-                "/Applications/Yapfast.app/Contents/MacOS/yapfast".to_owned(),
+            let mut command = LAUNCH.map(str::to_owned).to_vec();
+            command.extend([
                 "--background".to_owned(),
                 "--data-dir".to_owned(),
                 "/Users/a/Tom & Jerry <data>".to_owned(),
-            ];
+            ]);
             write_agent(home.path(), &command).unwrap();
             assert!(agent_enabled(home.path()));
             let text = std::fs::read_to_string(agent(home.path())).unwrap();
@@ -484,7 +525,12 @@ mod macos {
 	<string>io.github.yapfast.Yapfast</string>
 	<key>ProgramArguments</key>
 	<array>
-		<string>/Applications/Yapfast.app/Contents/MacOS/yapfast</string>
+		<string>/usr/bin/open</string>
+		<string>-n</string>
+		<string>-g</string>
+		<string>-b</string>
+		<string>io.github.yapfast.Yapfast</string>
+		<string>--args</string>
 		<string>--background</string>
 		<string>--data-dir</string>
 		<string>/Users/a/Tom &amp; Jerry &lt;data&gt;</string>
@@ -509,7 +555,8 @@ mod macos {
         #[test]
         fn an_agent_turned_off_is_off() {
             let home = tempfile::tempdir().unwrap();
-            write_agent(home.path(), &["yapfast".to_owned()]).unwrap();
+            write_agent(home.path(), &LAUNCH.map(str::to_owned)).unwrap();
+            assert!(agent_enabled(home.path()));
             let path = agent(home.path());
             let text = std::fs::read_to_string(&path).unwrap();
             std::fs::write(
@@ -519,6 +566,22 @@ mod macos {
             .unwrap();
             assert!(!agent_enabled(home.path()));
             std::fs::remove_file(&path).unwrap();
+            assert!(!agent_enabled(home.path()));
+        }
+
+        #[test]
+        fn an_agent_whose_binary_went_is_off() {
+            let home = tempfile::tempdir().unwrap();
+            let binary = home.path().join("Tom & Jerry <builds>/yapfast");
+            std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+            std::fs::write(&binary, "").unwrap();
+            let command = [
+                binary.to_str().unwrap().to_owned(),
+                "--background".to_owned(),
+            ];
+            write_agent(home.path(), &command).unwrap();
+            assert!(agent_enabled(home.path()));
+            std::fs::remove_file(&binary).unwrap();
             assert!(!agent_enabled(home.path()));
         }
     }

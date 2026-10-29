@@ -62,14 +62,23 @@ mount. The preview, and platforms without an entry, don't show the switch.
 The Windows installer's "Start Yapfast automatically when Windows starts"
 writes the same value, and uninstalling removes it.
 
-The macOS agent runs the executable itself, `Contents/MacOS/yapfast` inside
-`Yapfast.app` when started from the bundle, with `RunAtLoad`, `ProcessType`
-`Interactive` and `LimitLoadToSessionType` `Aqua`, so launchd starts it once
-as the person signs in to the desktop. Yapfast writes the file and leaves
-loading it to the next sign-in; macOS says "Login item added" as the file
-appears. Turning Yapfast off in System Settings → General → Login Items keeps
-the file and records it in macOS's own list, which Yapfast doesn't read, so
-the switch stays on there.
+The macOS agent names no path to `Yapfast.app`: it runs `/usr/bin/open -n -g
+-b io.github.yapfast.Yapfast --args --background`, so LaunchServices finds
+the app by its bundle ID wherever it is at sign-in, starts it without
+bringing it forward, and a Yapfast already running ends the new start as
+any later start does. A downloaded app opened where it was unzipped runs
+from a temporary copy macOS makes for a quarantined app (App
+Translocation), gone after the next sign-in, which a path would have
+named. With the app deleted, `open` fails and nothing starts, though the
+file stays. Only a `yapfast` binary outside a bundle, such as one in
+`target/`, is named by its path; an agent whose binary is gone shows as
+off. The agent has `RunAtLoad`, `ProcessType` `Interactive` and
+`LimitLoadToSessionType` `Aqua`, so launchd runs it once as the person
+signs in to the desktop. Yapfast writes the file and leaves loading it to
+the next sign-in; macOS says "Login item added" as the file appears.
+Turning Yapfast off in System Settings → General → Login Items keeps the
+file and records it in macOS's own list, which Yapfast doesn't read, so the
+switch stays on there.
 
 `--background` restores the saved session and goes to the tray without
 showing the window, or shows it when there's no session to restore, since

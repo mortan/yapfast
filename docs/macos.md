@@ -68,7 +68,8 @@ Yapfast does on macOS what it does on Linux, apart from what's
   through Yapfast's own Quit, and a call holds off App Nap
   ([the tray](tray.md#macos)).
 - **Start at sign-in** writes a launchd agent,
-  `~/Library/LaunchAgents/io.github.yapfast.Yapfast.plist`
+  `~/Library/LaunchAgents/io.github.yapfast.Yapfast.plist`, which opens
+  `Yapfast.app` by its bundle ID wherever it is
   ([starting at sign-in](tray.md#starting-at-sign-in)).
 - **Notifications** go through Apple's User Notifications framework, from
   `Yapfast.app` only (`src/notify.rs`).
