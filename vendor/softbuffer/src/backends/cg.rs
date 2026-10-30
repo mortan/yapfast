@@ -38,7 +38,7 @@ use std::sync::Mutex;
 const MAX_FRAMES: usize = 3;
 
 /// Yapfast: how long the window draws nothing before the frames it doesn't show become
-/// purgeable. Purged while it animates, a frame would be drawn whole again at its next turn.
+/// purgeable. Purged while it animates, a frame would be drawn whole the next time it is used.
 const IDLE_SECONDS: f64 = 1.0;
 
 define_class!(
@@ -361,12 +361,17 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> SurfaceInterface<D, W> for CGImpl<
     fn buffer_mut(&mut self) -> Result<BufferImpl<'_, D, W>, SoftBufferError> {
         // Yapfast: draw into a frame the window server is done with, never the one the layer
         // shows, and make a new one only when every other frame is still in use.
-        // Of those, the one shown longest ago, so the frames take turns and none falls more
-        // presents behind than Slint's renderer remembers what changed (three), which would draw
-        // it whole; one drawn whole anyway (age 0) last.
+        // Of those, the one shown most recently, so Slint redraws what changed over the fewest
+        // presents: two frames alternate, and a third, needed only when presents come close
+        // together, is drawn whole once it falls more presents behind than Slint remembers
+        // (three). Taking turns kept every frame three presents behind instead, and each redrew
+        // the union of three presents' changes. A frame with no contents (age 0) last.
         let free = (0..self.frames.len())
             .filter(|&index| Some(index) != self.front && !self.frames[index].surface.is_in_use())
-            .max_by_key(|&index| self.frames[index].age);
+            .min_by_key(|&index| {
+                let age = self.frames[index].age;
+                (age == 0, age)
+            });
         let index = match free {
             Some(index) => index,
             None if self.frames.len() < MAX_FRAMES => {

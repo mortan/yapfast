@@ -14,9 +14,12 @@ Changes, marked `Yapfast:` in `src/backends/cg.rs`:
 - Skia draws straight into up to three IOSurfaces of the window's size, and
   the layer shows one of them without a copy. A new frame takes a surface
   the window server no longer reads, never the one shown, so a frame is
-  never drawn while it is on screen; of those, the one shown longest ago,
-  so the surfaces take turns and none falls more frames behind than Slint
-  remembers what changed, which would draw it whole.
+  never drawn while it is on screen; of those, the one shown most recently,
+  so Slint redraws what changed over the fewest presents. Two surfaces
+  alternate; the third, needed only when presents come close together, is
+  drawn whole once it falls more presents behind than Slint remembers what
+  changed. Taking turns instead kept every surface three presents behind,
+  and each frame redrew the union of three presents' changes.
 - `age()` reports how many presents ago a surface was shown, so Slint
   redraws only what changed since then instead of the whole window.
 - Once the window has drawn nothing for a second, the surfaces the layer
