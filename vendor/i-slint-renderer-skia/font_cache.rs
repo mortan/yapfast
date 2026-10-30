@@ -97,9 +97,13 @@ impl FontCache {
             && let Some(typeface) = read_fonts::CollectionRef::new(font.data.as_ref())
                 .ok()
                 .and_then(|ttc| ttc.get(font.index).ok())
-                .map(|ttf| write_fonts::FontBuilder::new().copy_missing_tables(ttf).build())
-                .and_then(|new_ttf| {
-                    self.font_mgr.new_from_data(skia_safe::Data::new_copy(&new_ttf), None)
+                .and_then(|ttf| {
+                    // Yapfast: the system's own face, and the copy only when it lists none.
+                    system_face(&self.font_mgr, &ttf).or_else(|| {
+                        let new_ttf =
+                            write_fonts::FontBuilder::new().copy_missing_tables(ttf).build();
+                        self.font_mgr.new_from_data(skia_safe::Data::new_copy(&new_ttf), None)
+                    })
                 })
         {
             return Some(typeface);
@@ -107,6 +111,50 @@ impl FontCache {
 
         typeface
     }
+}
+
+/// Yapfast: the face of a font collection as macOS's font manager has it, found by its family,
+/// PostScript name and glyph count, and taken only if its `head` table, with the font's revision,
+/// modification time and checksum, is the same: another version of the font installed elsewhere
+/// has other glyph ids for the same name and count. The system reads it from the collection's
+/// file, where the face rebuilt as a font of its own sat on the heap for the whole session, tens
+/// of megabytes for a CJK font. `None` for a face the font manager doesn't list, such as a hidden
+/// system font.
+#[cfg(target_vendor = "apple")]
+fn system_face(
+    font_mgr: &skia_safe::FontMgr,
+    face: &read_fonts::FontRef,
+) -> Option<skia_safe::Typeface> {
+    use read_fonts::{
+        TableProvider,
+        types::{NameId, Tag},
+    };
+    // The `head` table is 54 bytes long.
+    let head = face.table_data(Tag::new(b"head"))?.as_bytes();
+    let name = face.name().ok()?;
+    let data = name.string_data();
+    let names = |id: NameId| {
+        name.name_record()
+            .iter()
+            .filter(move |record| record.name_id() == id)
+            .filter_map(move |record| record.string(data).ok())
+            .map(|string| string.to_string())
+    };
+    let post_script_name = names(NameId::POSTSCRIPT_NAME).next()?;
+    let glyphs = usize::from(face.maxp().ok()?.num_glyphs());
+    names(NameId::TYPOGRAPHIC_FAMILY_NAME).chain(names(NameId::FAMILY_NAME)).find_map(|family| {
+        let mut set = font_mgr.match_family(&family);
+        (0..set.count()).filter_map(|index| set.new_typeface(index)).find(|typeface| {
+            typeface.post_script_name().as_deref() == Some(post_script_name.as_str())
+                && typeface.count_glyphs() == glyphs
+                && {
+                    let mut system_head = [0; 54];
+                    let read = typeface
+                        .get_table_data(u32::from_be_bytes(*b"head"), &mut system_head);
+                    system_head.get(..read) == Some(head)
+                }
+        })
+    })
 }
 
 /// Yapfast: every font blob Skia reads without a copy, by blob id, never released.

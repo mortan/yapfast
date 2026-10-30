@@ -50,7 +50,14 @@ pictures drawn smaller than their pixels, such as avatars, look jagged. Larger
 ones, such as video frames, go without: each frame would build its mipmaps
 anew. So do pictures drawn no smaller than their pixels, such as a call's
 camera, made at its tile's size. Skia reads fonts where fontique keeps them
-rather than copying each file to the heap. It reads a picture made in code,
+rather than copying each file to the heap. On macOS, where Skia can't read a
+face other than the first from a font collection's bytes, it takes that face
+from macOS's font manager, found by family, PostScript name and glyph count
+and taken only when its `head` table matches, so another installed version of
+the font isn't drawn with this one's glyph ids. That spares rebuilding the
+face as a font of its own on the heap, tens of megabytes for a CJK font; it
+still does that when the font manager lists no such face, as for hidden
+system fonts. It reads a picture made in code,
 such as a camera's frame or an avatar, where Slint keeps it too, rather than
 copying it for each new frame: a table on the UI thread keeps the Slint buffer
 beside Skia's image until nothing else holds that image, and Slint copies a
@@ -215,7 +222,8 @@ dependency in Cargo.toml:
   older messages load, a wheel that speeds up when spun fast, and middle-click
   autoscroll, above.
 - `i-slint-renderer-skia`: Slint's Skia renderer 1.18.1 with slight hinting,
-  mipmapped pictures, uncopied fonts and pictures, and Skia's own FreeType on
+  mipmapped pictures, uncopied fonts and pictures, collection fonts from
+  macOS's font manager, and Skia's own FreeType on
   Linux without wgpu, above, and a whole frame after every resize: Windows
   restores a minimized window at its old size without its pixels, which
   partial rendering left black.
