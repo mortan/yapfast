@@ -366,9 +366,8 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> SurfaceInterface<D, W> for CGImpl<
         // Yapfast: draw into a frame the window server is done with, never the one the layer
         // shows, and make a new one only when every other frame is still in use.
         // Of those, the one shown most recently, so Slint redraws what changed over the fewest
-        // presents: two frames alternate, and a third, needed only when presents come close
-        // together, is drawn whole once it falls more presents behind than Slint remembers
-        // (three). Taking turns kept every frame three presents behind instead, and each redrew
+        // presents: two frames alternate, and a third is needed only when presents come close
+        // together. Taking turns kept every frame three presents behind instead, and each redrew
         // the union of three presents' changes. A frame with no contents (age 0) last.
         let free = (0..self.frames.len())
             .filter(|&index| Some(index) != self.front && !self.frames[index].surface.is_in_use())
@@ -407,7 +406,30 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> SurfaceInterface<D, W> for CGImpl<
         // A row may be longer than the width, for the alignment IOSurface needs; Slint takes the
         // row length from the buffer's length.
         let len = frame.surface.bytes_per_row() / 4 * self.height;
-        let age = frame.age;
+
+        // Yapfast: a frame Slint would draw whole, one with no contents or more presents behind
+        // than Slint remembers what changed (three), starts as a copy of the frame shown, and
+        // Slint draws only what changed since the last present. An update that presents twice in
+        // quick succession takes the third frame for the second while the window server still
+        // reads the one before; copying the window costs less than drawing it whole.
+        if let Some(front) = self.front.filter(|_| !(1..STALE_AGE).contains(&frame.age)) {
+            let (shown, drawn) = (&self.frames[front].surface, &self.frames[index].surface);
+            // SAFETY: The seed may be null; unlocked right after the copy.
+            unsafe { shown.lock(IOSurfaceLockOptions::ReadOnly, ptr::null_mut()) };
+            // SAFETY: Both surfaces are locked, so mapped, and frames of one size have one row
+            // length.
+            unsafe {
+                ptr::copy_nonoverlapping(
+                    shown.base_address().as_ptr().cast::<u32>(),
+                    drawn.base_address().as_ptr().cast::<u32>(),
+                    len,
+                )
+            };
+            // SAFETY: Locked above; the seed may be null.
+            unsafe { shown.unlock(IOSurfaceLockOptions::ReadOnly, ptr::null_mut()) };
+            self.frames[index].age = 1;
+        }
+        let age = self.frames[index].age;
 
         Ok(BufferImpl {
             imp: self,
@@ -540,8 +562,8 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
                 frame.age = 1;
             } else {
                 frame.age = frame.age.saturating_add(u8::from(frame.age > 0));
-                // Yapfast: Slint draws a frame this far behind whole, so its contents are no
-                // longer worth keeping while the window animates; `buffer_mut` takes it back.
+                // Yapfast: `buffer_mut` overwrites a frame this far behind with the one shown,
+                // so its contents are no longer worth keeping while the window animates.
                 if frame.age == STALE_AGE {
                     // SAFETY: The old state may be null.
                     unsafe {

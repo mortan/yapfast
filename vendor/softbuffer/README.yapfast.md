@@ -16,19 +16,22 @@ Changes, marked `Yapfast:` in `src/backends/cg.rs`:
   the window server no longer reads, never the one shown, so a frame is
   never drawn while it is on screen; of those, the one shown most recently,
   so Slint redraws what changed over the fewest presents. Two surfaces
-  alternate; the third, needed only when presents come close together, is
-  drawn whole once it falls more presents behind than Slint remembers what
-  changed. Taking turns instead kept every surface three presents behind,
-  and each frame redrew the union of three presents' changes.
+  alternate; the third is needed only when presents come close together.
+  Taking turns instead kept every surface three presents behind, and each
+  frame redrew the union of three presents' changes.
+- A surface Slint would draw whole, one with no contents or more presents
+  behind than Slint remembers what changed, starts as a copy of the surface
+  shown, and Slint draws only what changed since. An update that presented
+  twice in quick succession drew the whole window the second time.
 - `age()` reports how many presents ago a surface was shown, so Slint
   redraws only what changed since then instead of the whole window.
 - Once the window has drawn nothing for a second, the surfaces the layer
   doesn't show are marked purgeable; macOS may take them back under memory
-  pressure, and the next frame drawn into one is drawn whole. The footprint
+  pressure, and the next frame drawn into one starts as a copy. The footprint
   counts them as reclaimable. Marked at every frame, they were taken back
   while a GIF played, and every few frames drew the whole window. A surface
   that falls more presents behind than Slint remembers is marked purgeable
-  at once, even while the window animates: Slint draws it whole anyway.
+  at once, even while the window animates: it is overwritten anyway.
 - A row may be longer than the window is wide, for IOSurface's alignment;
   Slint's renderer takes the row length from the buffer's length.
 - The surfaces are tagged sRGB, the space Slint's Skia renders in, where the
