@@ -1957,7 +1957,14 @@ fn send_mouse_event_to_item(
 pub(crate) struct TextCursorBlinker {
     cursor_visible: Property<bool>,
     cursor_blink_timer: crate::timers::Timer,
+    /// Yapfast: how often the cursor has toggled since it last started blinking.
+    toggles: core::cell::Cell<u8>,
 }
+
+/// Yapfast: the toggles, half a cycle each, after which the cursor stops blinking and stays
+/// shown, about ten seconds at the usual one-second cycle. Each toggle draws a frame, which kept
+/// an idle window with a focused input drawing twice a second for good.
+const BLINK_TOGGLES: u8 = 20;
 
 impl TextCursorBlinker {
     /// Creates a new instance, wrapped in a Pin<Rc<_>> because the boolean property
@@ -1966,6 +1973,7 @@ impl TextCursorBlinker {
         Rc::pin(Self {
             cursor_visible: Property::new(true),
             cursor_blink_timer: Default::default(),
+            toggles: Default::default(),
         })
     }
 
@@ -1988,6 +1996,8 @@ impl TextCursorBlinker {
     /// Starts the blinking cursor timer that will toggle the cursor and update all bindings that
     /// were installed on properties with set_binding call.
     pub fn start(self: &Pin<Rc<Self>>, ctx: &crate::SlintContext, cycle_duration: Duration) {
+        // Yapfast: typing or moving the cursor shows it through here, and it blinks anew.
+        self.toggles.set(0);
         if self.cursor_blink_timer.running() {
             self.cursor_blink_timer.restart();
         } else {
@@ -2000,6 +2010,12 @@ impl TextCursorBlinker {
                             .apply_pin(blinker.as_ref())
                             .get();
                         blinker.cursor_visible.set(!visible);
+                        // Yapfast: stop once it has blinked a while, with the cursor shown.
+                        let toggles = blinker.toggles.get().saturating_add(1);
+                        blinker.toggles.set(toggles);
+                        if !visible && toggles >= BLINK_TOGGLES {
+                            blinker.cursor_blink_timer.stop();
+                        }
                     }
                 }
             };

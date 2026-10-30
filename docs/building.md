@@ -158,6 +158,15 @@ that ends it goes no further. Yapfast marks where it began through
 `yapfast_autoscroll.rs` and the changes marked `Yapfast:` about it in
 `items/flickable.rs`, `items/text.rs` and `window.rs`.
 
+A `TextInput`'s cursor stops blinking, and stays shown, after about ten
+seconds, ten blinks, in which the cursor didn't move; whatever moves it while
+the input has the focus, such as typing, a click, an input method, pasting or
+undoing, blinks it again from shown, and so does taking the focus. Upstream it
+blinks for as long as the input has the focus, and each blink draws a frame,
+so an idle window with the composer focused drew twice a second. These are the
+changes marked `Yapfast:` in `input.rs` and in `items/text.rs`'s
+`set_cursor_position_with_affinity`.
+
 Reapply them to the matching release when upgrading Slint. Styled paragraphs now
 have byte ranges as if joined by newlines, where upstream gives them all `0..0`.
 
@@ -219,8 +228,8 @@ dependency in Cargo.toml:
 
 - `i-slint-core`: Slint's core 1.18.1 with selectable `StyledText`,
   mentions coloured in a `TextInput`, timelines that keep their place as
-  older messages load, a wheel that speeds up when spun fast, and middle-click
-  autoscroll, above.
+  older messages load, a wheel that speeds up when spun fast, middle-click
+  autoscroll, and a cursor that stops blinking when left alone, above.
 - `i-slint-renderer-skia`: Slint's Skia renderer 1.18.1 with slight hinting,
   mipmapped pictures, uncopied fonts and pictures, collection fonts from
   macOS's font manager, and Skia's own FreeType on

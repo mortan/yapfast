@@ -1870,6 +1870,11 @@ impl TextInput {
     ) {
         self.cursor_position_byte_offset.set(new_position);
         self.cursor_affinity.set(affinity);
+        // Yapfast: show the cursor and blink it anew wherever it goes, by a click, typing, an
+        // input method, pasting or undoing, as the blinker stops after a while alone.
+        if self.has_focus() {
+            self.show_cursor(window_adapter);
+        }
         if new_position >= 0 {
             let pos = self
                 .cursor_rect_for_byte_offset(
