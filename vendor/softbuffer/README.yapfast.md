@@ -26,7 +26,9 @@ Changes, marked `Yapfast:` in `src/backends/cg.rs`:
   doesn't show are marked purgeable; macOS may take them back under memory
   pressure, and the next frame drawn into one is drawn whole. The footprint
   counts them as reclaimable. Marked at every frame, they were taken back
-  while a GIF played, and every few frames drew the whole window.
+  while a GIF played, and every few frames drew the whole window. A surface
+  that falls more presents behind than Slint remembers is marked purgeable
+  at once, even while the window animates: Slint draws it whole anyway.
 - A row may be longer than the window is wide, for IOSurface's alignment;
   Slint's renderer takes the row length from the buffer's length.
 - The surfaces are tagged sRGB, the space Slint's Skia renders in, where the

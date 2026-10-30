@@ -41,6 +41,10 @@ const MAX_FRAMES: usize = 3;
 /// purgeable. Purged while it animates, a frame would be drawn whole the next time it is used.
 const IDLE_SECONDS: f64 = 1.0;
 
+/// Yapfast: the age of a frame more presents behind than Slint's renderer remembers what changed
+/// (three), which it draws whole.
+const STALE_AGE: u8 = 4;
+
 define_class!(
     #[unsafe(super(NSObject))]
     #[name = "SoftbufferObserver"]
@@ -536,6 +540,17 @@ impl<D: HasDisplayHandle, W: HasWindowHandle> BufferInterface for BufferImpl<'_,
                 frame.age = 1;
             } else {
                 frame.age = frame.age.saturating_add(u8::from(frame.age > 0));
+                // Yapfast: Slint draws a frame this far behind whole, so its contents are no
+                // longer worth keeping while the window animates; `buffer_mut` takes it back.
+                if frame.age == STALE_AGE {
+                    // SAFETY: The old state may be null.
+                    unsafe {
+                        frame.surface.set_purgeable(
+                            IOSurfacePurgeabilityState::PurgeableVolatile.0,
+                            ptr::null_mut(),
+                        )
+                    };
+                }
             }
         }
         imp.front = Some(index);
